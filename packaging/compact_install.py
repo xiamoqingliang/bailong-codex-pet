@@ -24,6 +24,15 @@ LOCAL_ID = "custom:bailong-full"
 MUTEX = r"Local\BailongCodexBridgeSupervisorV1"
 CLOUD_ID = re.compile(r"pet_[A-Za-z0-9_-]+\Z")
 MAX_CONFIG = 1024 * 1024
+DESKTOP_KEYS = ("selected-avatar-id", "avatar-overlay-pet-visible")
+UNINSTALL_MARKER = "uninstall.request"
+REQUIRED_BRIDGE_FILES = (
+    "bridge_loader.py bridge_pet.py pet_lifecycle.py bridge_policy.py bridge_supervisor.py "
+    "bailong_toolbar.py activity_animation.py activity_cards.py activity_runtime.py activity_source.py "
+    "activity_ui_hints.ps1 codex_observer.ps1 native_mini_control.ps1 native_menu_shield.cs "
+    "native_overlay_mask.py native_visibility.py desktop_ipc.py desktop_chat_adapter.py "
+    "desktop_chat_link.py detached_launcher.py asset_source.py bridge-config.json"
+).split()
 
 
 class InstallError(RuntimeError):
@@ -125,6 +134,48 @@ def update_config(raw: bytes | None, selected: str) -> bytes:
     return (b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b"") + text.encode("utf-8")
 
 
+def desktop_before(config: dict) -> dict:
+    desktop = config.get("desktop", {})
+    result = {}
+    for key in DESKTOP_KEYS:
+        present = key in desktop
+        value = desktop.get(key)
+        if present and (type(value) is not (str if key == "selected-avatar-id" else bool)):
+            raise InstallError("宠物设置的类型无效，未修改。")
+        result[key] = {"present": present, "value": value if present else None}
+    return result
+
+
+def receipt_before(raw: bytes | None, config: dict) -> dict:
+    if raw is None:
+        return desktop_before(config)
+    try:
+        def require(condition):
+            if not condition:
+                raise ValueError("Invalid installation receipt")
+        value = json.loads(raw.decode("utf-8-sig"))
+        require(type(value.get("schemaVersion")) is int and value["schemaVersion"] == 1)
+        require(value.get("edition") == "full")
+        require(isinstance(value.get("dataRoot"), str) and Path(value["dataRoot"]).is_absolute())
+        safe_path(Path(value["dataRoot"]))
+        require(isinstance(value.get("avatarId"), str))
+        require(value["avatarId"] == LOCAL_ID or CLOUD_ID.fullmatch(value["avatarId"]))
+        require(all(isinstance(value["files"][name], str) and re.fullmatch(r"[a-fA-F0-9]{64}", value["files"][name])
+                    for name in ("pet.json", "spritesheet.webp")))
+        before = value["desktopBefore"]
+        for key in DESKTOP_KEYS:
+            field = before[key]
+            require(type(field["present"]) is bool)
+            if field["present"]:
+                require(type(field["value"]) is (str if key == "selected-avatar-id" else bool))
+            else:
+                require(field.get("value") is None)
+        # Keep the original choice through repeated installs and folder moves.
+        return {key: {"present": before[key]["present"], "value": before[key]["value"]} for key in DESKTOP_KEYS}
+    except (ValueError, UnicodeError, AssertionError, KeyError, TypeError, AttributeError, InstallError) as error:
+        raise InstallError("已有的白龙安装记录无效，未修改文件。") from error
+
+
 def startup_bytes(root: Path) -> bytes:
     pythonw = root / "runtime/pythonw.exe"
     supervisor = root / "codex-integration/bridge/bridge_supervisor.py"
@@ -197,12 +248,14 @@ def atomic_write(path: Path, content: bytes):
 
 
 def validate_package(root: Path):
-    for relative in ("runtime/python.exe", "runtime/pythonw.exe", "BailongPet.exe",
+    required = ("runtime/python.exe", "runtime/pythonw.exe", "BailongPet.exe", "uninstall.ps1",
                      "runtime/python313.dll", "runtime/DLLs/_sqlite3.pyd",
                      "_internal/Qt6Core.dll", "_internal/PySide6/QtCore.cp313-win_amd64.pyd",
                      "_internal/PIL/_imaging.cp313-win_amd64.pyd", "_internal/PIL/_webp.cp313-win_amd64.pyd",
                      "codex-integration/bridge/bridge_supervisor.py", "codex-integration/bridge/bridge_pet.py",
-                     "codex-integration/bridge/bridge-config.json", "codex-integration/clean-assets/素材清单.json"):
+                     "codex-integration/bridge/bridge-config.json", "codex-integration/clean-assets/素材清单.json")
+    required += tuple("codex-integration/bridge/" + name for name in REQUIRED_BRIDGE_FILES)
+    for relative in required:
         path = safe_path(root / relative)
         if not path.is_file():
             raise InstallError("安装包不完整，请完整解压后再运行唯一安装入口。")
@@ -317,6 +370,8 @@ def safe_to_switch(old, runtime):
 
 
 def activate(root: Path, old, runtime):
+    if (root / UNINSTALL_MARKER).exists():
+        return "cancelled-by-uninstall"
     current = snapshot(root)
     if runtime.process_matches(current.get("supervisorPid"), root / "runtime/pythonw.exe"):
         return "already-running"
@@ -337,7 +392,7 @@ def finish_when_idle(root: Path, old, runtime, maximum_seconds=43200, startup_di
 
     def still_requested():
         try:
-            return read_small(startup_path) == desired
+            return not (root / UNINSTALL_MARKER).exists() and read_small(startup_path) == desired
         except (OSError, InstallError):
             return False
 
@@ -377,14 +432,26 @@ def install(root: Path, user_home: Path, startup_dir: Path, *, check=False, runt
     startup_path = startup_dir / "BailongCodexBridge.vbs"
     old_startup = read_small(startup_path)
     old = validate_old(parse_old_startup(old_startup), root)
+    receipt_path = home / "pet-install-receipts/bailong-full.json"
+    old_receipt = read_small(receipt_path)
+    receipt = {"schemaVersion": 1, "edition": "full", "dataRoot": str(root), "avatarId": selected,
+               "files": {"pet.json": hashlib.sha256(manifest).hexdigest(),
+                         "spritesheet.webp": hashlib.sha256(image).hexdigest()},
+               "desktopBefore": receipt_before(old_receipt, parsed),
+               "desktopInstalled": {"selected-avatar-id": selected, "avatar-overlay-pet-visible": True}}
+    receipt_bytes = (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    uninstall_marker = root / UNINSTALL_MARKER
+    old_marker = read_small(uninstall_marker, 65536)
     targets = {
         home / "pets/bailong-full/pet.json": manifest,
         home / "pets/bailong-full/spritesheet.webp": image,
         config_path: config,
         startup_path: startup_bytes(root),
+        receipt_path: receipt_bytes,
     }
     originals = {path: read_small(path, 32 * 1024 * 1024) for path in targets}
-    if originals[config_path] != before_config or originals[startup_path] != old_startup:
+    if (originals[config_path] != before_config or originals[startup_path] != old_startup
+            or originals[receipt_path] != old_receipt):
         raise InstallError("Codex 设置正在变化，请稍后再运行安装；未修改任何文件。")
     changed = [path for path in targets if originals[path] != targets[path]]
     result = {"ok": True, "checkOnly": check, "filesChanged": len(changed),
@@ -393,6 +460,7 @@ def install(root: Path, user_home: Path, startup_dir: Path, *, check=False, runt
         return result
     backup = home / "pet-install-backups/bailong-full" / (datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8])
     written = []
+    removed_marker = False
     try:
         for index, path in enumerate(changed):
             if read_small(path, 32 * 1024 * 1024) != originals[path]:
@@ -401,6 +469,11 @@ def install(root: Path, user_home: Path, startup_dir: Path, *, check=False, runt
                 atomic_write(backup / f"{index}-{path.name}", originals[path])
             atomic_write(path, targets[path])
             written.append(path)
+        if read_small(uninstall_marker, 65536) != old_marker:
+            raise InstallError("检测到同时进行的卸载，已取消本次安装。")
+        if old_marker is not None:
+            uninstall_marker.unlink()
+            removed_marker = True
     except Exception:
         for path in reversed(written):
             if read_small(path, 32 * 1024 * 1024) == targets[path]:
@@ -408,6 +481,8 @@ def install(root: Path, user_home: Path, startup_dir: Path, *, check=False, runt
                     path.unlink()
                 else:
                     atomic_write(path, originals[path])
+        if removed_marker and not uninstall_marker.exists():
+            atomic_write(uninstall_marker, old_marker)
         raise
     result["activation"] = activate(root, old, runtime or WindowsRuntime())
     return result
@@ -453,6 +528,8 @@ def main():
         if os.name != "nt":
             raise InstallError("此安装包需要 Windows x64。")
         if options.finish:
+            if (root / UNINSTALL_MARKER).exists():
+                return 0
             from detached_launcher import process_in_job, launch_detached
             if process_in_job():
                 launch_detached(root / "runtime/pythonw.exe", [str(root / "install.py"), *sys.argv[1:]], root)
@@ -476,7 +553,7 @@ def main():
             if result["activation"] == "waiting-for-existing-pet":
                 print("当前旧版继续运行；正常关闭 Codex 后自动切换，无需再执行命令。")
             print("若 Codex 列表尚未刷新，请在当前任务结束后正常关闭并重新打开 Codex。")
-            print("请保留此解压目录，运行文件和登录启动项仍使用它。")
+            print("请保留此解压目录。删除前先运行“一键卸载白龙.cmd”，等待卸载窗口结束。")
         return 0
     except Exception as error:
         message = str(error) if isinstance(error, InstallError) else "安装未完成；请检查完整解压、目录写入权限及配置格式。"

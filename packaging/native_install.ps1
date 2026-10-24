@@ -38,6 +38,57 @@ function Equal-Bytes($Left, $Right) {
     return [Convert]::ToBase64String([byte[]]$Left) -ceq [Convert]::ToBase64String([byte[]]$Right)
 }
 
+function Get-BytesSha256([byte[]]$Bytes) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($algorithm.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $algorithm.Dispose() }
+}
+
+function Get-ReceiptBefore([byte[]]$Bytes) {
+    if ($null -eq $Bytes) { return $null }
+    try {
+        $value = (New-Object Text.UTF8Encoding($false, $true)).GetString($Bytes).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        foreach ($key in @('schemaVersion','edition','dataRoot','avatarId','files','desktopBefore','desktopInstalled')) {
+            if ($null -eq $value.PSObject.Properties[$key]) { throw 'Missing receipt field' }
+        }
+        if (($value.schemaVersion -isnot [int] -and $value.schemaVersion -isnot [long]) -or
+            $value.schemaVersion -ne 1 -or $value.edition -cne 'native' -or
+            $value.dataRoot -isnot [string] -or -not [IO.Path]::IsPathRooted($value.dataRoot) -or
+            $value.avatarId -isnot [string] -or $value.avatarId -cnotmatch '^(custom:bailong|pet_[A-Za-z0-9_-]+)$') {
+            throw 'Invalid receipt identity'
+        }
+        $null = Assert-LocalPath $value.dataRoot
+        foreach ($key in @('pet.json','spritesheet.webp')) {
+            $property = $value.files.PSObject.Properties[$key]
+            if ($null -eq $property -or $property.Value -isnot [string] -or $property.Value -cnotmatch '^[0-9a-fA-F]{64}$') {
+                throw 'Invalid receipt digest'
+            }
+        }
+        $before = [ordered]@{}
+        foreach ($key in @('selected-avatar-id','avatar-overlay-pet-visible')) {
+            $property = $value.desktopBefore.PSObject.Properties[$key]
+            if ($null -eq $property -or $null -eq $property.Value.PSObject.Properties['present'] -or
+                $null -eq $property.Value.PSObject.Properties['value'] -or $property.Value.present -isnot [bool]) {
+                throw 'Invalid previous desktop value'
+            }
+            $entry = $property.Value
+            if (-not $entry.present -and $null -ne $entry.value) { throw 'Absent desktop value must be null' }
+            if ($entry.present -and (($key -ceq 'selected-avatar-id' -and $entry.value -isnot [string]) -or
+                ($key -ceq 'avatar-overlay-pet-visible' -and $entry.value -isnot [bool]))) {
+                throw 'Invalid previous desktop value type'
+            }
+            $before[$key] = [ordered]@{ present = $entry.present; value = $entry.value }
+        }
+        $installedId = $value.desktopInstalled.PSObject.Properties['selected-avatar-id']
+        $installedVisible = $value.desktopInstalled.PSObject.Properties['avatar-overlay-pet-visible']
+        if ($null -eq $installedId -or $null -eq $installedVisible -or
+            $installedId.Value -cne $value.avatarId -or $installedVisible.Value -isnot [bool] -or
+            $installedVisible.Value -ne $true) { throw 'Invalid installed desktop values' }
+        return $before
+    }
+    catch { throw '已有白龙安装记录无效，未修改任何文件。请保留该记录并检查安装目录。' }
+}
+
 function Write-Atomic([string]$Path, [byte[]]$Bytes) {
     $null = Assert-LocalPath $Path
     $parent = Split-Path -Parent $Path
@@ -215,6 +266,18 @@ public static class BailongNativeTomlV1 {
         if (!info.Values.TryGetValue("selected-avatar-id", out value)) return null;
         return value.Text.Substring(1, value.Text.Length - 2);
     }
+    public static Dictionary<string,object> DesktopBefore(string text) {
+        Info info = Inspect(text);
+        var result = new Dictionary<string,object>();
+        foreach (string key in new string[] { "selected-avatar-id", "avatar-overlay-pet-visible" }) {
+            Value value;
+            bool present = info.Values.TryGetValue(key, out value);
+            object previous = null;
+            if (present) previous = key == "selected-avatar-id" ? (object)QuotedKey(value.Text) : value.Text == "true";
+            result.Add(key, new Dictionary<string,object> { {"present", present}, {"value", previous} });
+        }
+        return result;
+    }
     public static string Update(string text, string selected) {
         if (!Regex.IsMatch(selected, @"^(custom:bailong|pet_[A-Za-z0-9_-]+)$")) throw Unsupported();
         Info info = Inspect(text);
@@ -290,13 +353,36 @@ $newText = [BailongNativeTomlV1]::Update($configText, $selected)
 [byte[]]$newConfig = $utf8.GetBytes($newText)
 if ($hadBom) { $newConfig = [byte[]](@(239,187,191) + $newConfig) }
 
+$receiptPath = Join-Path $homePath 'pet-install-receipts\bailong.json'
+[byte[]]$beforeReceipt = Read-OptionalBytes $receiptPath
+$previousDesktop = Get-ReceiptBefore $beforeReceipt
+if ($null -eq $previousDesktop) {
+    $snapshot = [BailongNativeTomlV1]::DesktopBefore($configText)
+    $previousDesktop = [ordered]@{}
+    foreach ($key in @('selected-avatar-id','avatar-overlay-pet-visible')) {
+        $previousDesktop[$key] = [ordered]@{ present = $snapshot[$key]['present']; value = $snapshot[$key]['value'] }
+    }
+}
+$receipt = [ordered]@{
+    schemaVersion = 1
+    edition = 'native'
+    dataRoot = $dataPath
+    avatarId = $selected
+    files = [ordered]@{ 'pet.json' = (Get-BytesSha256 $manifestBytes); 'spritesheet.webp' = (Get-BytesSha256 $spriteBytes) }
+    desktopBefore = $previousDesktop
+    desktopInstalled = [ordered]@{ 'selected-avatar-id' = $selected; 'avatar-overlay-pet-visible' = $true }
+}
+[byte[]]$receiptBytes = $utf8.GetBytes(($receipt | ConvertTo-Json -Depth 8) + [char]10)
+
 $targets = @(
     [PSCustomObject]@{ Path=(Join-Path $targetPath 'pet.json'); Bytes=$manifestBytes; Before=$null },
     [PSCustomObject]@{ Path=(Join-Path $targetPath 'spritesheet.webp'); Bytes=$spriteBytes; Before=$null },
-    [PSCustomObject]@{ Path=$configPath; Bytes=$newConfig; Before=$null }
+    [PSCustomObject]@{ Path=$configPath; Bytes=$newConfig; Before=$null },
+    [PSCustomObject]@{ Path=$receiptPath; Bytes=$receiptBytes; Before=$null }
 )
 foreach ($target in $targets) { $target.Before = Read-OptionalBytes $target.Path 33554432 }
 if (-not (Equal-Bytes $targets[2].Before $beforeConfig)) { throw 'Codex 配置正在变化，请稍后再安装；未修改文件。' }
+if (-not (Equal-Bytes $targets[3].Before $beforeReceipt)) { throw '白龙安装记录正在变化，请稍后再安装；未修改文件。' }
 $changed = @($targets | Where-Object { -not (Equal-Bytes $_.Before $_.Bytes) })
 $backupPath = $null
 if (-not $CheckOnly -and $changed.Count -gt 0) {
@@ -322,7 +408,7 @@ if (-not $CheckOnly -and $changed.Count -gt 0) {
     }
 }
 $status = if ($CheckOnly) { 'CheckOnly' } elseif ($changed.Count -eq 0) { 'AlreadyInstalled' } else { 'Installed' }
-[PSCustomObject]@{ Status=$status; Target=$targetPath; FilesChanged=$changed.Count; SettingsChanged=(-not (Equal-Bytes $beforeConfig $newConfig)); BackupDirectory=$backupPath }
+[PSCustomObject]@{ Status=$status; Target=$targetPath; FilesChanged=$changed.Count; SettingsChanged=(-not (Equal-Bytes $beforeConfig $newConfig)); BackupDirectory=$backupPath; ReceiptPath=$receiptPath }
 if (-not $CheckOnly) {
     Write-Host '安装完成：“白龙”已导入并设为默认宠物，已允许显示。'
     Write-Host '完成当前任务后重开 Codex 加载白龙；若 Mini 此前隐藏，请点击一次“显示 Mini”。'

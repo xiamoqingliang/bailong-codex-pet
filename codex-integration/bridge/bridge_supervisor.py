@@ -358,6 +358,9 @@ def signal_stop(base: Path, name: str) -> None:
 
 
 def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
+    uninstall_marker = base.parents[1] / "uninstall.request"
+    if uninstall_marker.exists():
+        return 0
     mutex = WindowsMutex()
     acquired = mutex.acquire()
     # An explicit re-enable may arrive while the previous owner is still
@@ -408,6 +411,8 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
     observer_generation = None
     exit_code = 0
     try:
+        if uninstall_marker.exists():
+            return 0
         for name in STOP_NAMES:
             (base / name).unlink(missing_ok=True)
         worker_command = [str(pythonw_path()), str(base / "bridge_pet.py")]
@@ -418,7 +423,7 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
         logger.info("supervisor started pid=%d", os.getpid())
         observer_generation = publish_observer_generation(base, minimum_mtime)
         native_control.set_generation(observer_generation)
-        while not (base / "supervisor.stop").exists():
+        while not (base / "supervisor.stop").exists() and not uninstall_marker.exists():
             now = time.monotonic()
             if observer is not None:
                 result = observer.poll()
@@ -591,6 +596,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.stop:
         signal_stop(BASE, "supervisor.stop")
         print("Bridge stop requested; the supervisor will stop its children gracefully.")
+        return 0
+    if (BASE.parents[1] / "uninstall.request").exists():
         return 0
     if os.name != "nt":
         parser.error("the bridge supervisor requires Windows")

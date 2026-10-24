@@ -39,3 +39,8 @@ conversations.json
 
 # 项目首页展示图。
 !docs/images/*.png
+
+# 本机安装归属与卸载状态。
+uninstall.request
+install-status.txt
+pet-install-receipts/
