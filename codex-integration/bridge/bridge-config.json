@@ -1,0 +1,8 @@
+{
+  "fullAvatarIds": [
+    "custom:bailong-full"
+  ],
+  "fullAvatarSlug": "bailong-full",
+  "mode": "dedicated-toolbar",
+  "assetsDirectory": "codex-integration/clean-assets"
+}

@@ -1,0 +1,41 @@
+# 安装包、运行环境和动画素材通过 Releases 提供。
+*.zip
+*.exe
+*.dll
+*.pyd
+*.webp
+*.png
+*.mp3
+*.wav
+runtime/
+_internal/
+outputs/
+releases/
+codex-integration/clean-assets/
+
+# 本地运行与开发数据。
+__pycache__/
+*.pyc
+*.tmp
+*.log
+*.stop
+.venv/
+codex-integration/bridge/*-status.json
+codex-integration/bridge/*-state.json
+codex-integration/bridge/*-request.json
+codex-integration/bridge/observer-generation.json
+codex-integration/bridge/bridge-layout.json
+codex-integration/bridge/original-code/
+codex-integration/bridge/backups/
+
+# 账号与聊天内容。
+.env
+.env.*
+auth.json
+config.toml
+conversations.json
+*.sqlite
+*.sqlite-*
+
+# 项目首页展示图。
+!docs/images/*.png
