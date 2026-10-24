@@ -87,7 +87,7 @@ Codex 缓存或云端同名条目仍由 Codex 管理，如列表中仍有显示�
 
 ## 动画去噪工具
 
-提供当时使用的 [透明边缘清理工具包](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/alpha-cleanup-tool-2026.10.25/Bailong-Alpha-Cleanup-Tool-2026.10.25.zip)（约 18 KB），源码和使用方法见 [tools/alpha-cleanup](tools/alpha-cleanup/README.md)。
+提供使用的 [透明边缘清理工具包](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/alpha-cleanup-tool-2026.10.25/Bailong-Alpha-Cleanup-Tool-2026.10.25.zip)（约 18 KB），源码和使用方法见 [tools/alpha-cleanup](tools/alpha-cleanup/README.md)。
 
 工具针对白龙 v0.4.1 的 720×720 透明动画，仅清理符合规则的透明边缘像素，保留 RGB、帧数和播放时序。支持指定输入／输出目录和生成预览，不覆盖原素材。需要 Python 及依赖，包内不含角色素材。
 
