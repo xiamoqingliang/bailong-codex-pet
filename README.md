@@ -85,6 +85,12 @@ Codex 缓存或云端同名条目仍由 Codex 管理，如列表中仍有显示�
 - 任务卡以本机可识别的主聊天状态为准；等待确认状态取决于原生界面可提供的信息，不保证覆盖远程任务或全部子代理。
 - 原生简化版采用现有的 9 状态图集，不包含完整版的全部动画、台词、音效与专属控制栏。
 
+## 动画去噪工具
+
+提供当时使用的 [透明边缘清理工具包](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/alpha-cleanup-tool-2026.10.25/Bailong-Alpha-Cleanup-Tool-2026.10.25.zip)（约 18 KB），源码和使用方法见 [tools/alpha-cleanup](tools/alpha-cleanup/README.md)。
+
+工具针对白龙 v0.4.1 的 720×720 透明动画，仅清理符合规则的透明边缘像素，保留 RGB、帧数和播放时序。支持指定输入／输出目录和生成预览，不覆盖原素材。需要 Python 及依赖，包内不含角色素材。
+
 ## 致谢与许可
 
 感谢 [jingh12312-rgb](https://github.com/jingh12312-rgb) 创作并授权发布白龙桌宠适配版。欢迎关注 [原项目](https://github.com/jingh12312-rgb/bailong-desktop-pet)。

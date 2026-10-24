@@ -44,3 +44,7 @@ conversations.json
 uninstall.request
 install-status.txt
 pet-install-receipts/
+
+# 去噪工具本地产生的预览、素材与路径报告。
+tools/alpha-cleanup/clean-assets/
+tools/alpha-cleanup/idle2-trial/
