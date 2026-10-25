@@ -1,9 +1,10 @@
 """Launch a hidden Python helper outside its caller's Windows job lifetime.
 
-The new process stays suspended until IsProcessInJob confirms that it is not
-owned by any job. Failure is explicit; this module never falls back to an
-ordinary child that would be killed when Codex exits. No shell or service is
-used, and no environment variables or command arguments are logged.
+Direct children stay suspended until they have left every inherited Job.
+The local Windows process service can also start the helper outside the
+caller's Job tree, even when Windows assigns it a non-terminating system Job.
+An ordinary dependent child is never used as a fallback. No environment
+variables or command arguments are logged.
 """
 from __future__ import annotations
 
@@ -25,6 +26,9 @@ CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 CREATE_NO_WINDOW = 0x08000000
 CREATE_SUSPENDED = 0x00000004
 CREATION_FLAGS = CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_SUSPENDED
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+# Process-local provenance, deliberately not an inherited environment flag.
+_VERIFIED_INDEPENDENT_PID = None
 
 
 class DetachedLaunchError(RuntimeError):
@@ -51,6 +55,31 @@ class PROCESS_INFORMATION(ctypes.Structure):
                 ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD)]
 
 
+class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD)]
+
+
+class IO_COUNTERS(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_ulonglong) for name in
+               ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+
+class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+
 class WindowsProcessApi:
     def __init__(self):
         if os.name != "nt":
@@ -60,6 +89,10 @@ class WindowsProcessApi:
         self.api.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE,
                                             ctypes.POINTER(wintypes.BOOL))
         self.api.IsProcessInJob.restype = wintypes.BOOL
+        self.api.QueryInformationJobObject.argtypes = (
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD))
+        self.api.QueryInformationJobObject.restype = wintypes.BOOL
         self.api.CreateProcessW.argtypes = (
             wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_void_p, ctypes.c_void_p,
             wintypes.BOOL, wintypes.DWORD, ctypes.c_void_p, wintypes.LPCWSTR,
@@ -90,6 +123,16 @@ class WindowsProcessApi:
             raise DetachedLaunchError(f"Independent background launch failed (Windows error {ctypes.get_last_error()}); no dependent fallback was started.")
         return process
 
+    def current_job_limits(self):
+        # NULL queries ONLY the immediate Job. Never use this to prove that
+        # an ordinary child escaped an ancestor Job with kill-on-close.
+        limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        if not self.api.QueryInformationJobObject(None, 9, ctypes.byref(limits),
+                                                  ctypes.sizeof(limits), None):
+            raise DetachedLaunchError(
+                f"Could not verify the background Job lifetime (Windows error {ctypes.get_last_error()}).")
+        return int(limits.BasicLimitInformation.LimitFlags)
+
     def resume(self, handle):
         if self.api.ResumeThread(handle) != 1:
             raise DetachedLaunchError("The independent helper could not be resumed safely.")
@@ -107,6 +150,21 @@ class WindowsProcessApi:
 def process_in_job(*, _api=None):
     """Check the current process; no process is created or modified."""
     return (_api or WindowsProcessApi()).in_job()
+
+
+def process_requires_detach(*, _api=None):
+    """Whether this process still needs to leave its caller's Job tree.
+
+    A non-killing immediate Job alone does not establish independence: a
+    killing ancestor may exist. Only the verified service-created wrapper
+    can accept a residual system Job. This provenance cannot cross PIDs.
+    """
+    api = _api or WindowsProcessApi()
+    if not api.in_job():
+        return False
+    if _VERIFIED_INDEPENDENT_PID != os.getpid():
+        return True
+    return bool(api.current_job_limits() & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
 
 
 def _absolute_existing(path, *, directory=False):
@@ -188,6 +246,17 @@ $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Argumen
     CurrentDirectory = [string]$payload.cwd
     ProcessStartupInformation = $startup
 }
+# Some service/system Jobs disallow explicit breakaway. A failed creation
+# has not run the wrapper; retry through the SAME external provider without
+# that flag. The wrapper still rejects a killing Job before running code.
+if ([int]$created.ReturnValue -in @(2, 3, 8) -and -not $created.ProcessId) {
+    $startup.CreateFlags = [uint32]134217728
+    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = [string]$payload.command
+        CurrentDirectory = [string]$payload.cwd
+        ProcessStartupInformation = $startup
+    }
+}
 @{ pid = [int]$created.ProcessId; result = [int]$created.ReturnValue } | ConvertTo-Json -Compress
 '''
 
@@ -215,16 +284,22 @@ def _launch_wmi(executable, args, cwd):
             raise DetachedLaunchError("Windows could not start the independent companion through its local process service.")
         result = json.loads(completed.stdout.lstrip("\ufeff"))
         if result.get("result") != 0 or type(result.get("pid")) is not int or result["pid"] <= 0:
-            raise DetachedLaunchError("The local process service rejected independent companion startup.")
+            code = result.get("result")
+            safe_code = code if type(code) is int else "invalid response"
+            raise DetachedLaunchError(
+                f"The local process service rejected independent companion startup (Win32_Process.Create: {safe_code}).")
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             try:
                 report = json.loads(report_path.read_text(encoding="utf-8"))
                 if report.get("pid") == result["pid"]:
                     if report.get("detached") is not True or report.get("sameSession") is not True or report.get("sameProfile") is not True:
-                        raise DetachedLaunchError("The background process failed its independent-user check and did not run the companion.")
+                        reason = report.get("reason", "job, session or profile verification failed")
+                        raise DetachedLaunchError(f"The background process did not run the companion: {reason}.")
                     return {"pid": result["pid"], "detached": True, "method": "windows-local-wmi",
-                            "sameSession": True, "sameProfile": True}
+                            "sameSession": True, "sameProfile": True,
+                            "systemJob": report.get("inJob") is True,
+                            "jobLimitFlags": report.get("jobLimitFlags", 0)}
             except (OSError, ValueError):
                 pass
             time.sleep(.05)
@@ -236,7 +311,7 @@ def _launch_wmi(executable, args, cwd):
 
 
 def launch_detached(executable, args, cwd, *, _api=None, _wmi=None):
-    """Start outside all parent Jobs, including Codex's nested Job hierarchy."""
+    """Start independently of the caller, including nested Codex Jobs."""
     executable = _absolute_existing(executable)
     cwd = _absolute_existing(cwd, directory=True)
     # Validate the complete command before invoking either creation mechanism.
@@ -252,8 +327,11 @@ def launch_detached(executable, args, cwd, *, _api=None, _wmi=None):
     args = [str(script), *args[1:]]
     try:
         return _launch_direct(executable, args, cwd, _api=_api)
-    except DetachedLaunchError:
-        return (_wmi or _launch_wmi)(executable, args, cwd)
+    except DetachedLaunchError as direct_error:
+        try:
+            return (_wmi or _launch_wmi)(executable, args, cwd)
+        except DetachedLaunchError as broker_error:
+            raise broker_error from direct_error
 
 
 def verified_child(argv):
@@ -264,16 +342,32 @@ def verified_child(argv):
     parser.add_argument("script_args", nargs=argparse.REMAINDER)
     options = parser.parse_args(argv)
     arguments = options.script_args[1:] if options.script_args[:1] == ["--"] else options.script_args
-    report = {"pid": os.getpid(), "detached": not process_in_job(),
-              "sameSession": current_session_id() == options.session,
-              "sameProfile": profile_fingerprint() == options.profile}
     if not options.report.is_file():
         return 1
+    report = {"pid": os.getpid(), "detached": False, "sameSession": False,
+              "sameProfile": False}
+    try:
+        api = WindowsProcessApi()
+        in_job = api.in_job()
+        flags = api.current_job_limits() if in_job else 0
+        report.update(inJob=in_job, jobLimitFlags=flags,
+                      detached=not bool(flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE),
+                      sameSession=current_session_id() == options.session,
+                      sameProfile=profile_fingerprint() == options.profile)
+        if not report["detached"]:
+            report["reason"] = "Windows assigned a Job with KILL_ON_JOB_CLOSE"
+    except (OSError, DetachedLaunchError) as error:
+        report["reason"] = str(error)
     options.report.write_text(json.dumps(report), encoding="utf-8")
     if not all(report[key] for key in ("detached", "sameSession", "sameProfile")):
         return 1
     if not arguments or not Path(arguments[0]).is_absolute():
         return 1
+    # When this file was invoked as __main__, runpy's target will later import
+    # detached_launcher by name. Share one module so the verified provenance
+    # is visible there without persisting or inheriting an opt-out flag.
+    module = sys.modules.setdefault("detached_launcher", sys.modules[__name__])
+    module._VERIFIED_INDEPENDENT_PID = os.getpid()
     sys.argv = arguments
     runpy.run_path(arguments[0], run_name="__main__")
     return 0

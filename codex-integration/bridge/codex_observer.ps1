@@ -7,7 +7,9 @@ param(
     [switch]$Once,
     [switch]$ProbeIdentity,
     [long]$ProbeHwnd = 0,
-    [int]$ProbePid = 0
+    [int]$ProbePid = 0,
+    [string]$ProbeReadyPath = '',
+    [string]$ProbeToken = ''
 )
 
 # Launch with powershell.exe -NoProfile -WindowStyle Hidden -File <this file>.
@@ -145,7 +147,7 @@ $desktopConfigReadAt = [DateTime]::MinValue
 $desktopConfigVerifiedAt = [DateTime]::MinValue
 $desktopSelection = [ordered]@{ selectionKnown = $false; selectedAvatarId = $null; nativePetVisible = $null }
 $selectionPolicyPath = Join-Path $PSScriptRoot 'bridge_policy.py'
-if ([string]::IsNullOrWhiteSpace($PythonPath)) {
+if (!$ProbeIdentity -and [string]::IsNullOrWhiteSpace($PythonPath)) {
     try { $PythonPath = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
     catch { Write-ObserverError 'selection-python' $_.Exception }
 } elseif ([IO.Path]::GetFileName($PythonPath) -ieq 'pythonw.exe') {
@@ -180,8 +182,7 @@ try:
     path=Path(sys.argv[1])
     if path.stat().st_size>1048576:
         raise ValueError('oversize')
-    with path.open('rb') as stream:
-        desktop=tomllib.load(stream).get('desktop',{})
+    desktop=tomllib.loads(path.read_text(encoding='utf-8-sig')).get('desktop',{})
     if not isinstance(desktop,dict):
         raise ValueError('invalid desktop')
     selected=desktop.get('selected-avatar-id')
@@ -370,66 +371,195 @@ if ($ProbeIdentity) {
     # UIA can wait inside Electron for many seconds. Keep it in a disposable
     # read-only child, never on the observer's host/visibility sampling loop.
     $verified = $false
+    $reason = 'target-not-verified'
     try {
         $target = Get-Process -Id $ProbePid -ErrorAction Stop
         if ($target.Path -cmatch '\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\ChatGPT\.exe$') {
             $match = @([BailongCodexObserverNative]::Find([int[]]@($ProbePid)) |
                 Where-Object { $_.Handle.ToInt64() -eq $ProbeHwnd })
-            if ($match.Count -eq 1) { $verified = Test-HiddenMiniIdentity ([IntPtr]$ProbeHwnd) }
+            if ($match.Count -eq 1) {
+                # Signal only after PowerShell, UIAutomation and native-code
+                # initialization. The parent's UIA budget starts at this point.
+                if (![string]::IsNullOrWhiteSpace($ProbeReadyPath) -and $ProbeToken -cmatch '^[a-f0-9]{32}$') {
+                    $ready = [ordered]@{ token = $ProbeToken; helperPid = $PID; pid = $ProbePid; hwnd = $ProbeHwnd }
+                    [IO.File]::WriteAllText($ProbeReadyPath, ($ready | ConvertTo-Json -Compress), $utf8)
+                }
+                $verified = Test-HiddenMiniIdentity ([IntPtr]$ProbeHwnd)
+                $reason = $(if ($verified) {'verified'} else {'identity-not-found'})
+            }
         }
-    } catch { }
-    [ordered]@{ pid = $ProbePid; hwnd = $ProbeHwnd; verified = [bool]$verified } | ConvertTo-Json -Compress
+    } catch { $reason = 'probe-error' }
+    [ordered]@{ pid = $ProbePid; hwnd = $ProbeHwnd; token = $ProbeToken;
+        verified = [bool]$verified; reason = $reason } | ConvertTo-Json -Compress
     exit 0
 }
 
-$identityProbe = $null
-$identityRetryAt = @{}
-
-function Close-IdentityProbe {
-    if ($null -eq $script:identityProbe) { return }
-    $process = $script:identityProbe.Process
-    try { if (!$process.HasExited) { $process.Kill() } } catch { }
-    $process.Dispose()
+function Initialize-IdentityProbeState {
     $script:identityProbe = $null
+    $script:identityRetryAt = @{}
+    $script:identityFailures = @{}
+    $script:identityLastAttempt = @{}
+    $script:identityCleanupPaths = @{}
+    $script:identityInitializationSeconds = 20
+    $script:identityQuerySeconds = 3
+    $script:identityDiagnostic = [ordered]@{
+        attempts = 0; verified = 0; failures = 0; cancelled = 0
+        initializationTimeouts = 0; queryTimeouts = 0
+        lastReason = $null; lastDurationMs = $null; lastInitializationMs = $null
+    }
+}
+
+function Remove-IdentityProbeFiles {
+    # Only paths generated for this observer's own children enter this list.
+    # A sharing violation gets another try on a later sampling iteration.
+    foreach ($path in @($script:identityCleanupPaths.Keys)) {
+        try { [IO.File]::Delete($path); $script:identityCleanupPaths.Remove($path) }
+        catch {
+            if ([DateTime]::UtcNow -gt $script:identityCleanupPaths[$path]) {
+                $script:identityCleanupPaths.Remove($path)
+                Write-ObserverError 'identity-cleanup' $_.Exception
+            }
+        }
+    }
+}
+
+function Close-IdentityProbe([string]$Reason = 'cancelled', [switch]$Completed) {
+    if ($null -eq $script:identityProbe) { return }
+    $probe = $script:identityProbe
+    $process = $probe.Process
+    try { if (!$process.HasExited) { $process.Kill() } } catch { }
+    try { $process.Dispose() } catch { }
+    if (!$Completed) { $script:identityDiagnostic.cancelled++ }
+    $script:identityDiagnostic.lastReason = $Reason
+    $script:identityDiagnostic.lastDurationMs = [int][Math]::Max(0, ([DateTime]::UtcNow - $probe.StartedAt).TotalMilliseconds)
+    $script:identityCleanupPaths[$probe.ReadyPath] = [DateTime]::UtcNow.AddSeconds(30)
+    $script:identityProbe = $null
+    Remove-IdentityProbeFiles
+}
+
+function Get-IdentityProbeKey($Candidate) {
+    return ('{0}:{1}' -f $Candidate.Pid, $Candidate.Handle.ToInt64())
+}
+
+function Set-IdentityProbeFailure([string]$Key, [string]$Reason) {
+    $count = 1
+    if ($script:identityFailures.ContainsKey($Key)) { $count += $script:identityFailures[$Key] }
+    $script:identityFailures[$Key] = $count
+    $seconds = [Math]::Min(15, [Math]::Pow(2, [Math]::Min(4, $count - 1)))
+    $script:identityRetryAt[$Key] = [DateTime]::UtcNow.AddSeconds($seconds)
+    $script:identityDiagnostic.failures++
+    $script:identityDiagnostic.lastReason = $Reason
+}
+
+function Read-IdentityProbeReady($Probe) {
+    if ($null -ne $Probe.ReadyAt) { return }
+    try {
+        $info = Get-Item -LiteralPath $Probe.ReadyPath -ErrorAction Stop
+        if ($info.Length -gt 1024) { return }
+        $ready = [IO.File]::ReadAllText($Probe.ReadyPath) | ConvertFrom-Json -ErrorAction Stop
+        if ($ready.token -ceq $Probe.Token -and $ready.helperPid -eq $Probe.Process.Id -and
+            $ready.pid -eq $Probe.Pid -and $ready.hwnd -eq $Probe.Handle) {
+            $Probe.ReadyAt = [DateTime]::UtcNow
+            $script:identityDiagnostic.lastInitializationMs = [int][Math]::Max(0, ($Probe.ReadyAt - $Probe.StartedAt).TotalMilliseconds)
+        }
+    } catch { } # Missing/partially written handshake is not a completed phase.
 }
 
 function Update-IdentityProbe($Candidates) {
+    Remove-IdentityProbeFiles
+    $keys = @($Candidates | ForEach-Object { Get-IdentityProbeKey $_ })
+    foreach ($table in @($script:identityRetryAt, $script:identityFailures, $script:identityLastAttempt)) {
+        foreach ($key in @($table.Keys)) { if ($key -notin $keys) { $table.Remove($key) } }
+    }
     if ($null -eq $script:identityProbe) { return }
     $probe = $script:identityProbe
     $present = @($Candidates | Where-Object { $_.Pid -eq $probe.Pid -and $_.Handle.ToInt64() -eq $probe.Handle })
-    if ($present.Count -ne 1) { Close-IdentityProbe; return }
+    if ($present.Count -ne 1) { Close-IdentityProbe 'target-disappeared'; return }
+    Read-IdentityProbeReady $probe
     if ($probe.Process.HasExited) {
+        $verified = $false
+        $reason = 'invalid-result'
         try {
-            $result = $probe.Process.StandardOutput.ReadToEnd() | ConvertFrom-Json
-            if ($result.verified -eq $true -and $result.pid -eq $probe.Pid -and $result.hwnd -eq $probe.Handle) {
-                $knownOverlayHandles[$probe.Key] = $probe.Pid
+            $output = $probe.Process.StandardOutput.ReadToEnd()
+            if ($output.Length -le 4096) {
+                $result = $output | ConvertFrom-Json -ErrorAction Stop
+                if ($result.token -ceq $probe.Token -and $result.pid -eq $probe.Pid -and
+                    $result.hwnd -eq $probe.Handle -and $result.verified -is [bool]) {
+                    $verified = $result.verified
+                    $reason = $(if ($verified) {'verified'} elseif ($result.reason -in @('identity-not-found','target-not-verified','probe-error')) {$result.reason} else {'identity-not-found'})
+                }
             }
         } catch { }
-        $identityRetryAt[$probe.Key] = [DateTime]::UtcNow.AddMilliseconds(500)
-        Close-IdentityProbe
-    } elseif (([DateTime]::UtcNow - $probe.StartedAt).TotalSeconds -ge 2) {
-        $identityRetryAt[$probe.Key] = [DateTime]::UtcNow.AddMilliseconds(500)
-        Close-IdentityProbe
+        if ($verified) {
+            $knownOverlayHandles[$probe.HandleKey] = $probe.Pid
+            $script:identityDiagnostic.verified++
+            $script:identityFailures.Remove($probe.Key)
+            $script:identityRetryAt.Remove($probe.Key)
+        } else { Set-IdentityProbeFailure $probe.Key $reason }
+        Close-IdentityProbe $reason -Completed
+    } elseif ($null -eq $probe.ReadyAt -and ([DateTime]::UtcNow - $probe.StartedAt).TotalSeconds -ge $script:identityInitializationSeconds) {
+        $script:identityDiagnostic.initializationTimeouts++
+        Set-IdentityProbeFailure $probe.Key 'initialization-timeout'
+        Close-IdentityProbe 'initialization-timeout' -Completed
+    } elseif ($null -ne $probe.ReadyAt -and ([DateTime]::UtcNow - $probe.ReadyAt).TotalSeconds -ge $script:identityQuerySeconds) {
+        $script:identityDiagnostic.queryTimeouts++
+        Set-IdentityProbeFailure $probe.Key 'uia-timeout'
+        Close-IdentityProbe 'uia-timeout' -Completed
     }
+}
+
+function New-IdentityProbeProcess($Info) {
+    return [Diagnostics.Process]::Start($Info)
 }
 
 function Start-IdentityProbe($Candidate) {
     if ($null -ne $script:identityProbe) { return }
-    $key = $Candidate.Handle.ToInt64().ToString()
+    $key = Get-IdentityProbeKey $Candidate
     if ($identityRetryAt.ContainsKey($key) -and [DateTime]::UtcNow -lt $identityRetryAt[$key]) { return }
+    $handleKey = $Candidate.Handle.ToInt64().ToString()
+    $token = [Guid]::NewGuid().ToString('N')
+    $readyPath = Join-Path $stateDirectory ('.identity-probe.' + $PID + '.' + $token + '.json')
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = Join-Path $PSHOME 'powershell.exe'
     $info.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath +
-        '" -ProbeIdentity -ProbePid ' + $Candidate.Pid + ' -ProbeHwnd ' + $key
+        '" -ProbeIdentity -ProbePid ' + $Candidate.Pid + ' -ProbeHwnd ' + $handleKey +
+        ' -ProbeReadyPath "' + $readyPath + '" -ProbeToken ' + $token
+    if (![string]::IsNullOrWhiteSpace($PythonPath)) { $info.Arguments += ' -PythonPath "' + $PythonPath + '"' }
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $process = [Diagnostics.Process]::Start($info)
-    $script:identityProbe = @{ Process = $process; Pid = $Candidate.Pid;
-        Handle = $Candidate.Handle.ToInt64(); Key = $key; StartedAt = [DateTime]::UtcNow }
+    $script:identityDiagnostic.attempts++
+    $script:identityDiagnostic.lastInitializationMs = $null
+    $script:identityLastAttempt[$key] = [DateTime]::UtcNow
+    try {
+        $process = New-IdentityProbeProcess $info
+        $script:identityProbe = @{ Process = $process; Pid = $Candidate.Pid;
+            Handle = $Candidate.Handle.ToInt64(); HandleKey = $handleKey; Key = $key;
+            Token = $token; ReadyPath = $readyPath; ReadyAt = $null; StartedAt = [DateTime]::UtcNow }
+    } catch {
+        Set-IdentityProbeFailure $key 'start-failed'
+        Write-ObserverError 'identity-start' $_.Exception
+    }
 }
+
+function Get-IdentityProbeCandidates($Candidates) {
+    # Visible windows come first. Within each group, try the least recently
+    # attempted target so an unrelated tool window cannot monopolize probes.
+    return @($Candidates | Sort-Object @{Expression = { [bool]$_.Visible }; Descending = $true},
+        @{Expression = { $key = Get-IdentityProbeKey $_; if ($script:identityLastAttempt.ContainsKey($key)) {$script:identityLastAttempt[$key]} else {[DateTime]::MinValue} }})
+}
+
+function Get-IdentityProbeDiagnostic {
+    $value = [ordered]@{}
+    foreach ($key in $script:identityDiagnostic.Keys) { $value[$key] = $script:identityDiagnostic[$key] }
+    $value.phase = $(if ($null -eq $script:identityProbe) {'idle'} elseif ($null -eq $script:identityProbe.ReadyAt) {'initializing'} else {'querying-uia'})
+    $value.helperPid = $(if ($null -ne $script:identityProbe) {$script:identityProbe.Process.Id} else {$null})
+    return $value
+}
+
+Initialize-IdentityProbeState
 
 function Write-AtomicState([string]$Content) {
     $temporary = Join-Path $stateDirectory ('.codex-state.' + $PID + '.tmp')
@@ -511,7 +641,7 @@ do {
             # Identify the toolbar or named pet Image before trusting a tool window.
             $knownVisible = $null
             $knownHidden = $null
-            foreach ($candidate in $candidates) {
+            foreach ($candidate in (Get-IdentityProbeCandidates $candidates)) {
                 $key = $candidate.Handle.ToInt64().ToString()
                 $known = ($knownOverlayHandles.ContainsKey($key) -and $knownOverlayHandles[$key] -eq $candidate.Pid)
                 if (!$known -and [BailongCodexObserverNative]::HasBridgeMask($candidate.Handle)) { $known = $true }
@@ -542,7 +672,10 @@ do {
                 else { $guiPid = ($guiProcesses | Sort-Object StartTime | Select-Object -First 1).Id }
             }
         } else {
-            Close-IdentityProbe
+            Close-IdentityProbe 'codex-not-running'
+            $identityRetryAt.Clear()
+            $identityFailures.Clear()
+            $identityLastAttempt.Clear()
             $toolbarCache.Clear()
             $knownOverlayHandles.Clear()
         }
@@ -587,6 +720,7 @@ do {
         dpi = $dpi
         pid = $guiPid
         appStartedAt = $appStartedAt
+        identityProbe = Get-IdentityProbeDiagnostic
     }
     $comparison = ConvertTo-Json -InputObject $payload -Depth 4 -Compress
     $now = [DateTime]::UtcNow
@@ -599,4 +733,4 @@ do {
     $delay = [Math]::Max(25, $IntervalMs - ([DateTime]::UtcNow - $startedAt).TotalMilliseconds)
     Start-Sleep -Milliseconds ([int]$delay)
 } while ($true)
-Close-IdentityProbe
+Close-IdentityProbe 'observer-stopped'

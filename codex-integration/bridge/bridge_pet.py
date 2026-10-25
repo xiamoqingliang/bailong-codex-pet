@@ -8,20 +8,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sys
 import time
-import traceback
-
-from bridge_policy import full_mode_visible
-from pet_lifecycle import PetLifecycle
-from native_visibility import (BoundedStateFile, mask_ready, observer_generation,
-                               request_visibility, valid_observer_state)
 
 DIRECTORY = Path(__file__).resolve().parent
 STATE_FILE = DIRECTORY / "codex-state.json"
 STOP_FILE = DIRECTORY / "pet.stop"
 STATUS_FILE = DIRECTORY / "pet-status.json"
 LAYOUT_FILE = DIRECTORY / "bridge-layout.json"
-_STATE_READER = BoundedStateFile(max_age=15.0, validator=valid_observer_state)
+_STARTUP_STAGE = "bridge-import"
 _LAST_SELECTION = None
 _LAST_SELECTION_AT = None
 _LAST_SELECTION_CONTEXT = None
@@ -41,7 +36,61 @@ def write_json(path, value):
 
 
 def save_status(value):
-    write_json(STATUS_FILE, value)
+    write_json(STATUS_FILE, {"stage": _STARTUP_STAGE, **value})
+
+
+def report_stage(stage, phase="initializing"):
+    global _STARTUP_STAGE
+    _STARTUP_STAGE = stage
+    save_status({"pid": os.getpid(), "phase": phase, "updatedAt": time.time()})
+
+
+def log_error():
+    """Keep one bounded structural error report, never messages or source lines."""
+    error = sys.exception()
+    frames = []
+    trace = error.__traceback__ if error is not None else None
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        frames.append({"file": Path(code.co_filename).name[:100],
+                       "line": trace.tb_lineno, "function": code.co_name[:100]})
+        frames = frames[-12:]
+        trace = trace.tb_next
+    report = {"pid": os.getpid(), "stage": _STARTUP_STAGE, "updatedAt": time.time(),
+              "errorType": type(error).__name__[:100] if error is not None else "UnknownError",
+              "frames": frames}
+    code = getattr(error, "winerror", None)
+    if type(code) is int:
+        report["winerror"] = code
+    try:
+        # Replace the last error instead of appending raw tracebacks forever.
+        write_json(DIRECTORY / "pet-errors.log", report)
+    except OSError:
+        pass
+
+
+def record_startup_failure():
+    log_error()
+    try:
+        save_status({"pid": os.getpid(), "phase": "error", "updatedAt": time.time(),
+                     "exitReason": "error", "errorType": type(sys.exception()).__name__[:100]})
+    except OSError:
+        pass
+
+
+try:
+    if __name__ == "__main__":
+        report_stage("bridge-import")
+    from bridge_policy import full_mode_visible
+    from pet_lifecycle import PetLifecycle
+    from native_visibility import (BoundedStateFile, mask_ready, observer_generation,
+                                   request_visibility, valid_observer_state)
+    _STATE_READER = BoundedStateFile(max_age=15.0, validator=valid_observer_state)
+except Exception:
+    if __name__ != "__main__":
+        raise
+    record_startup_failure()
+    raise SystemExit(1)
 
 
 def read_state(*, now=None, monotonic_now=None):
@@ -83,17 +132,11 @@ def read_state(*, now=None, monotonic_now=None):
     return value
 
 
-def log_error():
-    path = DIRECTORY / "pet-errors.log"
-    if path.exists() and path.stat().st_size > 65536:
-        path.write_text(path.read_text(encoding="utf-8")[-16000:], encoding="utf-8")
-    with path.open("a", encoding="utf-8") as log:
-        log.write(traceback.format_exc() + "\n")
-
-
 def main():
+    report_stage("original-import")
     from bridge_loader import load_original_module
     original = load_original_module()
+    report_stage("integration-import")
     from desktop_chat_link import install_desktop_chat_link
     install_desktop_chat_link(original)
     from asset_source import configure_asset_source
@@ -102,9 +145,11 @@ def main():
     from activity_cards import create_activity_cards
     from activity_animation import ExternalActivityDriver
     from activity_runtime import ActivityRuntime
+    report_stage("qt-init")
     app = original.QApplication([str(Path(__file__).resolve())])
     app.setQuitOnLastWindowClosed(False)
 
+    report_stage("singleton")
     connection = original.QLocalSocket()
     connection.connectToServer("bailong-desktop-pet-v1")
     if connection.waitForConnected(200):
@@ -116,6 +161,7 @@ def main():
     if not server.listen("bailong-desktop-pet-v1"):
         raise RuntimeError("Could not acquire the original pet singleton endpoint")
 
+    report_stage("loading-animations", "loading-animations")
     save_status({"pid": os.getpid(), "phase": "loading-animations", "updatedAt": time.time(), **asset_status})
 
     starting_state = read_state()
@@ -192,6 +238,7 @@ def main():
         save_status({"pid": os.getpid(), "phase": "stopped", "updatedAt": time.time(),
                      "exitReason": cancelled.reason, "exitHostPid": starting_host})
         return 0
+    report_stage("controls-init")
     initial_state = read_state()
     if initial_state and type(initial_state.get("pid")) is int:
         widget.host_pid = initial_state["pid"]
@@ -310,6 +357,7 @@ def main():
             follower.last_active = None
             follower.update()
 
+    report_stage("running", "running")
     server.newConnection.connect(reveal_existing)
     follower.update()
     # A host can close while the original constructor preloads animations.
@@ -326,6 +374,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception:
-        log_error()
-        save_status({"pid": os.getpid(), "phase": "error", "updatedAt": time.time(), "exitReason": "error"})
-        raise
+        record_startup_failure()
+        raise SystemExit(1)

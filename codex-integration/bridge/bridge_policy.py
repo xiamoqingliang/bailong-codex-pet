@@ -88,8 +88,7 @@ def read_desktop_selection(path: Path) -> dict[str, object]:
         info = path.stat()
         if info.st_size > MAX_FILE_BYTES:
             return unknown
-        with path.open("rb") as source:
-            data = tomllib.load(source)
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
         desktop = data.get("desktop", {})
         if not isinstance(desktop, dict):
             return unknown

@@ -217,6 +217,21 @@ def read_worker_exit(path: Path, worker_pid: int, returncode: int,
     return WorkerExit(reason, host_pid, True)
 
 
+def read_worker_stage(path: Path, worker_pid: int, minimum_mtime: float) -> dict:
+    """Project only fixed diagnostic labels from this launch's status."""
+    data = BoundedStateFile(max_age=None).read(path, minimum_mtime=minimum_mtime)
+    if (not data or type(data.get("pid")) is not int or data["pid"] != worker_pid
+            or type(data.get("updatedAt")) not in (int, float)
+            or not minimum_mtime <= data["updatedAt"] <= time.time() + 2):
+        return {"workerPhase": "starting", "workerStage": "process-created"}
+    phases = {"initializing", "loading-animations", "running", "existing-pet", "closing", "stopped", "error"}
+    stages = {"bridge-import", "original-import", "integration-import", "qt-init", "singleton",
+              "loading-animations", "controls-init", "running"}
+    phase, stage = data.get("phase"), data.get("stage")
+    return {"workerPhase": phase if isinstance(phase, str) and phase in phases else "unknown",
+            "workerStage": stage if isinstance(stage, str) and stage in stages else "unknown"}
+
+
 
 
 class WindowsMutex:
@@ -373,11 +388,18 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
         return 1 if (base / 'supervisor.stop').exists() else 0
     # Do not erase stop requests while a previous owner is still waiting on
     # its original engine's graceful chat/thread shutdown.
+    # A fresh installation has no status file. Invalid/incomplete old state is
+    # equally optional and must not leave recovery variables uninitialized.
+    previous = {}
     try:
-        previous = json.loads((base / 'bridge-status.json').read_text(encoding='utf-8-sig'))
-        pending = previous.get('pendingChildPids', []) if isinstance(previous, dict) else []
+        saved = json.loads((base / 'bridge-status.json').read_text(encoding='utf-8-sig'))
+        if isinstance(saved, dict):
+            previous = saved
     except (OSError, ValueError):
-        pending = []
+        pass
+    pending = previous.get('pendingChildPids')
+    pending = ([pid for pid in pending if type(pid) is int and pid > 0]
+               if isinstance(pending, list) else [])
     while any(process_alive(pid) for pid in pending) and time.monotonic() < deadline:
         time.sleep(0.25)
     if any(process_alive(pid) for pid in pending):
@@ -404,14 +426,16 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
     observer_retry_at = 0.0
     observer_started = 0.0
     next_status_at = 0.0
-    from detached_launcher import process_in_job
+    from detached_launcher import process_requires_detach
     status = {"supervisorPid": os.getpid(), "workerPid": None, "observerPid": None,
-              "startedAt": utc_now(), "phase": "starting", "independentProcess": not process_in_job()}
+              "startedAt": utc_now(), "phase": "starting", "independentProcess": not process_requires_detach()}
     minimum_mtime = time.time()
     observer_generation = None
     exit_code = 0
+    stop_reason = "unknown"
     try:
         if uninstall_marker.exists():
+            stop_reason = "uninstall-request"
             return 0
         for name in STOP_NAMES:
             (base / name).unlink(missing_ok=True)
@@ -464,11 +488,15 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
             if worker is not None:
                 result = worker.poll()
                 if result is not None:
+                    stage = read_worker_stage(base / "pet-status.json", worker.pid, worker_started_at)
                     exit_info = read_worker_exit(base / "pet-status.json", worker.pid, result, worker_started_at)
-                    logger.info("worker exited code=%d reason=%s verified=%s hostPid=%s",
-                                result, exit_info.reason, exit_info.verified, exit_info.host_pid)
+                    logger.info("worker exited code=%d reason=%s verified=%s hostPid=%s stage=%s",
+                                result, exit_info.reason, exit_info.verified, exit_info.host_pid,
+                                stage["workerStage"])
                     last_worker_exit = {"code": result, "reason": exit_info.reason,
-                                        "verified": exit_info.verified, "hostPid": exit_info.host_pid}
+                                        "verified": exit_info.verified, "hostPid": exit_info.host_pid,
+                                        **stage}
+                    status["lastWorkerExit"] = last_worker_exit
                     worker = None
                     policy.exited(result, now, worker_generation,
                                   exit_reason=exit_info.reason, exit_host_pid=exit_info.host_pid)
@@ -527,14 +555,20 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
                               nativeControl=native_control.status(),
                               lastWorkerExit=last_worker_exit,
                               workerCrashRetries=policy.crash_retries)
+                status.update(read_worker_stage(base / "pet-status.json", worker.pid, worker_started_at)
+                              if worker is not None else {"workerPhase": None, "workerStage": None})
                 write_status(base, status, logger)
                 next_status_at = now + 2.0
             time.sleep(POLL_SECONDS)
+        stop_reason = "uninstall-request" if uninstall_marker.exists() else "supervisor-stop"
     except KeyboardInterrupt:
+        stop_reason = "keyboard-interrupt"
         logger.info("supervisor interrupted")
     except Exception as error:
         exit_code = 1
+        stop_reason = "error"
         logger.exception("supervisor failed: %s", type(error).__name__)
+        write_launch_error(base, error)
     finally:
         logger.info("requesting graceful child shutdown")
         try:
@@ -557,6 +591,7 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
             logger.warning("graceful shutdown still pending for child pids=%s; no process killed", remaining)
         native_control._poll(time.monotonic())
         status.update(updatedAt=utc_now(), phase="stopped", stoppedAt=utc_now(), exitCode=exit_code,
+                      stopReason=stop_reason,
                       workerPid=worker.pid if worker is not None and worker.poll() is None else None,
                       observerPid=observer.pid if observer is not None and observer.poll() is None else None,
                       pendingChildPids=remaining, overlayOpen=False, nativeOverlayOpen=False,
@@ -568,6 +603,20 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
             handler.close()
             logger.removeHandler(handler)
     return exit_code
+
+
+def write_launch_error(base: Path, error: Exception) -> None:
+    """Keep a PID-scoped startup diagnosis even when pythonw has no console."""
+    report = {"phase": "launch-error", "pid": os.getpid(), "reason": str(error),
+              "errorType": type(error).__name__, "at": utc_now()}
+    try:
+        (base / "launch-error.json").write_text(json.dumps(report, ensure_ascii=True), encoding="utf-8")
+    except OSError:
+        # A read-only/unavailable package directory must not hide the original
+        # error behind a second failure while writing its diagnostic file.
+        pass
+    if sys.stderr is not None:
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -601,21 +650,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if os.name != "nt":
         parser.error("the bridge supervisor requires Windows")
-    from detached_launcher import process_in_job, launch_detached, DetachedLaunchError
+    from detached_launcher import process_requires_detach, launch_detached
     try:
-        if process_in_job():
+        if process_requires_detach():
             arguments = sys.argv[1:] if argv is None else argv
             result = launch_detached(pythonw_path(), [str(BASE / "bridge_supervisor.py"), *arguments], BASE.parents[1])
             if sys.stdout is not None:
                 print(json.dumps(result, ensure_ascii=True))
             return 0
-    except (OSError, ValueError, DetachedLaunchError) as error:
-        (BASE / "launch-error.json").write_text(json.dumps({"phase": "launch-error", "reason": str(error),
-            "at": utc_now()}, ensure_ascii=True), encoding="utf-8")
-        if sys.stderr is not None:
-            print(str(error), file=sys.stderr)
+        return run_supervisor(BASE, show_on_start=args.show_on_start)
+    except Exception as error:
+        write_launch_error(BASE, error)
         return 1
-    return run_supervisor(show_on_start=args.show_on_start)
 
 
 if __name__ == "__main__":

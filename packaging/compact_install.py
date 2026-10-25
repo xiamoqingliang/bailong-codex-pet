@@ -5,7 +5,7 @@ import argparse
 import copy
 import ctypes
 from ctypes import wintypes
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import traceback
 import uuid
 
 LOCAL_ID = "custom:bailong-full"
@@ -37,6 +38,74 @@ REQUIRED_BRIDGE_FILES = (
 
 class InstallError(RuntimeError):
     pass
+
+
+class ActivationError(InstallError):
+    """Registration succeeded, but the companion did not confirm startup."""
+
+
+def error_details(error: Exception) -> dict:
+    """Report useful local diagnostics without serializing config or arguments."""
+    details = {"type": type(error).__name__}
+    for key in ("winerror", "errno"):
+        value = getattr(error, key, None)
+        if type(value) is int:
+            details[key] = value
+    frames = traceback.extract_tb(error.__traceback__)
+    details["frames"] = [{"file": Path(frame.filename).name, "line": frame.lineno,
+                           "function": frame.name} for frame in frames[-8:]]
+    if error.__cause__ is not None:
+        details["cause"] = error_details(error.__cause__)
+    return details
+
+
+def describe_error(error: Exception) -> str:
+    if isinstance(error, InstallError):
+        return str(error)
+    # Launcher messages contain only fixed explanations and numeric Windows
+    # errors; arbitrary exception text may contain configuration or user input.
+    launcher_error = getattr(sys.modules.get("detached_launcher"), "DetachedLaunchError", None)
+    if isinstance(launcher_error, type) and isinstance(error, launcher_error):
+        return "Windows 后台启动检查失败：" + str(error)
+    if isinstance(error, tomllib.TOMLDecodeError):
+        return "Codex 配置不是有效的 TOML，未修改配置。"
+    if isinstance(error, UnicodeError):
+        return "安装所需文本不是有效的 UTF-8，请检查配置或重新完整解压。"
+    if isinstance(error, PermissionError):
+        message = "无法写入安装或配置目录，文件可能被占用或没有写入权限。"
+    elif isinstance(error, FileNotFoundError):
+        message = "缺少安装所需文件，请完整解压后运行安装入口。"
+    elif isinstance(error, OSError):
+        message = "Windows 文件或进程操作失败。"
+    else:
+        message = "安装程序遇到异常。"
+    details = error_details(error)
+    codes = [details["type"]]
+    codes.extend(f"{key}={details[key]}" for key in ("winerror", "errno") if key in details)
+    if details["frames"]:
+        frame = details["frames"][-1]
+        codes.append(f'{frame["file"]}:{frame["line"]}')
+    return message + "（" + "; ".join(codes) + "）"
+
+
+def report_failure(root: Path, error: Exception, *, finish=False, persist=True) -> str:
+    message = describe_error(error)
+    if persist:
+        document = {"schemaVersion": 1, "ok": False,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "operation": "deferred-activation" if finish else "install",
+                    "registrationCompleted": isinstance(error, ActivationError),
+                    "message": message, "error": error_details(error)}
+        try:
+            atomic_write(root / "install-diagnostic.json",
+                         (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+            atomic_write(root / "install-status.txt", (message + "\n").encode("utf-8"))
+            message += "\n详细原因已保存在 data/install-diagnostic.json。"
+        except (OSError, InstallError):
+            message += "\n诊断文件也无法写入；请保留此窗口中的错误信息。"
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    return message
 
 
 def safe_path(path: Path) -> Path:
@@ -325,6 +394,8 @@ class WindowsRuntime:
         api.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
         api.OpenProcess.restype = wintypes.HANDLE
         api.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+        api.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        api.GetExitCodeProcess.restype = wintypes.BOOL
         api.CloseHandle.argtypes = (wintypes.HANDLE,)
         handle = api.OpenProcess(0x1000, False, pid)
         if not handle:
@@ -332,13 +403,80 @@ class WindowsRuntime:
         try:
             buffer = ctypes.create_unicode_buffer(32768)
             size = wintypes.DWORD(len(buffer))
-            return bool(api.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size))) and os.path.normcase(buffer.value) == os.path.normcase(str(executable))
+            exit_code = wintypes.DWORD()
+            return (bool(api.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)))
+                    and os.path.normcase(buffer.value) == os.path.normcase(str(executable))
+                    and bool(api.GetExitCodeProcess(handle, ctypes.byref(exit_code)))
+                    and exit_code.value == 259)  # STILL_ACTIVE, not a retained exited handle.
         finally:
             api.CloseHandle(handle)
 
     def launch(self, root, args):
         from detached_launcher import launch_detached
-        return launch_detached(root / "runtime/pythonw.exe", args, root)
+        started_at = time.time()
+        result = launch_detached(root / "runtime/pythonw.exe", args, root)
+        if args and Path(args[0]) == root / "codex-integration/bridge/bridge_supervisor.py":
+            wait_for_supervisor(root, result, self, started_at=started_at)
+        return result
+
+
+def wait_for_supervisor(root: Path, launch: dict, runtime, *, started_at: float,
+                        timeout: float = 15.0):
+    """Require a live supervisor reporting that it has started its observer."""
+    pid = launch.get("pid") if isinstance(launch, dict) else None
+    if type(pid) is not int or pid <= 0:
+        raise InstallError("后台启动未返回有效进程标识，无法确认助手已运行。")
+    bridge = root / "codex-integration/bridge"
+    deadline = time.monotonic() + timeout
+    dead_since = None
+    while True:
+        if (root / UNINSTALL_MARKER).exists():
+            raise InstallError("检测到卸载请求，已停止等待后台启动。")
+        state = snapshot(root)
+        try:
+            fresh = (bridge / "bridge-status.json").stat().st_mtime >= started_at - 1.0
+        except OSError:
+            fresh = False
+        same_pid = fresh and state.get("supervisorPid") == pid
+        # Two installers may both reach CreateProcess before the singleton is
+        # acquired. The loser exits normally; the winner at this exact package
+        # may confirm readiness for both installers.
+        if supervisor_ready(state) and state.get("supervisorPid") != pid:
+            if runtime.process_matches(state["supervisorPid"], root / "runtime/pythonw.exe"):
+                return
+        if same_pid and state.get("phase") == "stopped":
+            raise InstallError("后台助手在初始化期间退出；请查看 data/codex-integration/bridge/supervisor.log。")
+        # Only consume a launch error for the exact process just launched.
+        try:
+            failure_path = bridge / "launch-error.json"
+            if failure_path.stat().st_mtime >= started_at - 1.0:
+                failure = json.loads(read_small(failure_path, 65536).decode("utf-8-sig"))
+                if isinstance(failure, dict) and failure.get("pid") == pid:
+                    kind = failure.get("errorType")
+                    kind = kind if isinstance(kind, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", kind) else "StartupError"
+                    raise InstallError(f"后台助手初始化失败（{kind}）；详见 data/codex-integration/bridge/launch-error.json。")
+        except (OSError, ValueError, AttributeError):
+            pass
+        alive = runtime.process_matches(pid, root / "runtime/pythonw.exe")
+        now = time.monotonic()
+        if not alive:
+            dead_since = now if dead_since is None else dead_since
+            # A concurrent winner may own the mutex but not have emitted its
+            # first status yet. Give it bounded time to confirm this root.
+            if now >= deadline or (now - dead_since >= 2.0 and not runtime.mutex_open()):
+                raise InstallError("后台助手启动后立即退出，尚未确认安装完成；请查看 data/codex-integration/bridge 下的诊断文件。")
+        if alive and same_pid and supervisor_ready(state):
+            return
+        if now >= deadline:
+            raise InstallError("等待后台助手启动确认超时，尚未显示安装成功；请查看 data/codex-integration/bridge 下的诊断文件。")
+        time.sleep(.1)
+
+
+def supervisor_ready(state: dict) -> bool:
+    return (state.get("independentProcess") is True
+            and type(state.get("supervisorPid")) is int and state["supervisorPid"] > 0
+            and state.get("phase") in ("waiting-for-observer", "waiting-for-codex-pet", "visible", "hidden", "manually-closed")
+            and type(state.get("observerPid")) is int and state["observerPid"] > 0)
 
 
 def snapshot(root: Path):
@@ -374,6 +512,7 @@ def activate(root: Path, old, runtime):
         return "cancelled-by-uninstall"
     current = snapshot(root)
     if runtime.process_matches(current.get("supervisorPid"), root / "runtime/pythonw.exe"):
+        wait_for_supervisor(root, {"pid": current["supervisorPid"]}, runtime, started_at=time.time() - 15)
         return "already-running"
     if not runtime.mutex_open():
         runtime.launch(root, [str(root / "codex-integration/bridge/bridge_supervisor.py"), "--show-on-start"])
@@ -402,6 +541,7 @@ def finish_when_idle(root: Path, old, runtime, maximum_seconds=43200, startup_di
             return True  # Cancelled by disable or a newer install; this is not an error.
         current = snapshot(root)
         if runtime.process_matches(current.get("supervisorPid"), root / "runtime/pythonw.exe"):
+            wait_for_supervisor(root, {"pid": current["supervisorPid"]}, runtime, started_at=time.time() - 15)
             return True
         if not runtime.mutex_open():
             if not still_requested():
@@ -484,7 +624,10 @@ def install(root: Path, user_home: Path, startup_dir: Path, *, check=False, runt
         if removed_marker and not uninstall_marker.exists():
             atomic_write(uninstall_marker, old_marker)
         raise
-    result["activation"] = activate(root, old, runtime or WindowsRuntime())
+    try:
+        result["activation"] = activate(root, old, runtime or WindowsRuntime())
+    except Exception as error:
+        raise ActivationError("宠物文件和启动设置已安装，但后台助手未能确认启动。\n" + describe_error(error)) from error
     return result
 
 
@@ -523,15 +666,16 @@ def main():
     parser.add_argument("--old-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--old-pythonw", type=Path, help=argparse.SUPPRESS)
     options = parser.parse_args()
-    root = safe_path(Path(__file__).parent)
+    root = Path(__file__).parent
     try:
+        root = safe_path(root)
         if os.name != "nt":
             raise InstallError("此安装包需要 Windows x64。")
         if options.finish:
             if (root / UNINSTALL_MARKER).exists():
                 return 0
-            from detached_launcher import process_in_job, launch_detached
-            if process_in_job():
+            from detached_launcher import process_requires_detach, launch_detached
+            if process_requires_detach():
                 launch_detached(root / "runtime/pythonw.exe", [str(root / "install.py"), *sys.argv[1:]], root)
                 return 0
             old = (options.old_root, options.old_pythonw) if options.old_root and options.old_pythonw else None
@@ -544,11 +688,15 @@ def main():
                 guard.close()
             if not finished:
                 atomic_write(root / "install-status.txt", "旧桌宠仍在运行；新版本将在下次登录 Windows 时启用。\n".encode("utf-8"))
+            elif not (root / UNINSTALL_MARKER).exists():
+                atomic_write(root / "install-status.txt", "后台迁移处理已完成。\n".encode("utf-8"))
             return 0
         result = install(root, Path.home(), current_startup(), check=options.check)
         if options.check:
             print(json.dumps(result, ensure_ascii=True))
         else:
+            if result["activation"] == "cancelled-by-uninstall":
+                raise ActivationError("宠物文件曾完成安装，但检测到同时进行的卸载，后台启动已取消。")
             print("安装完成：白龙已设为默认显示，并已启用随 Codex 启动。")
             if result["activation"] == "waiting-for-existing-pet":
                 print("当前旧版继续运行；正常关闭 Codex 后自动切换，无需再执行命令。")
@@ -556,11 +704,7 @@ def main():
             print("请保留此解压目录。删除前先运行“一键卸载白龙.cmd”，等待卸载窗口结束。")
         return 0
     except Exception as error:
-        message = str(error) if isinstance(error, InstallError) else "安装未完成；请检查完整解压、目录写入权限及配置格式。"
-        if options.finish:
-            atomic_write(root / "install-status.txt", (message + "\n").encode("utf-8"))
-        else:
-            print(message, file=sys.stderr)
+        report_failure(root, error, finish=options.finish, persist=not options.check)
         return 1
 
 

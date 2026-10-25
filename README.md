@@ -6,7 +6,7 @@
 
 ## 下载与版本选择
 
-当前发布：**2026.10.25-r6**。支持 Windows 10/11 x64 和 Codex 桌面版。
+当前发布：**2026.10.25-r8**。支持 Windows 10/11 x64 和 Codex 桌面版。
 
 | |   完整版 | Codex 原生简化版 |
 |---|---|---|
@@ -16,7 +16,7 @@
 | 运行方式 | 原版引擎＋本地联动助手 | 由 Codex 自身播放 |
 | 适合谁 | 希望保留完整白龙体验 | 希望直接使用原生 Mini |
 | 下载大小 | 约 773 MB | 约 2.1 MB |
-| 安装包 | [下载完整版](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v2026.10.25-r6/Bailong-Codex-Full-Clean-2026.10.25-r6.zip) | [下载原生简化版](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v2026.10.25-r6/Bailong-Codex-Native-Minimal-2026.10.25-r6.zip) |
+| 安装包 | [下载完整版](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v2026.10.25-r8/Bailong-Codex-Full-Clean-2026.10.25-r8.zip) | [下载原生简化版](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v2026.10.25-r8/Bailong-Codex-Native-Minimal-2026.10.25-r8.zip) |
 
 两个版本均无需另装 Python，解压后提供 **一键安装到Codex.cmd** 和 **一键卸载白龙.cmd**。请下载上表中的安装包；GitHub 的 **Source code** 是源码，不是完整运行包。
 

@@ -43,6 +43,9 @@ conversations.json
 # 本机安装归属与卸载状态。
 uninstall.request
 install-status.txt
+install-diagnostic.json
+codex-integration/bridge/launch-error.json
+codex-integration/bridge/.identity-probe.*.json
 pet-install-receipts/
 
 # 去噪工具本地产生的预览、素材与路径报告。
