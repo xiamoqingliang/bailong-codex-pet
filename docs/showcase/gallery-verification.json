@@ -1,0 +1,77 @@
+{
+  "actualWidgets": true,
+  "upstreamVersion": "0.5.1",
+  "adaptationVersion": "0.5.1.1",
+  "preferencesIsolated": true,
+  "sampleConversationsOnly": true,
+  "modelRequests": 0,
+  "media": [
+    {
+      "file": "overview.png",
+      "kind": "static",
+      "actualWidgets": true
+    },
+    {
+      "file": "task-notice.png",
+      "kind": "static",
+      "actualWidgets": true
+    },
+    {
+      "file": "settings.png",
+      "kind": "static",
+      "actualWidgets": true
+    },
+    {
+      "file": "window-motion.gif",
+      "kind": "gif",
+      "fps": 20,
+      "seconds": 8,
+      "actualWidgets": true,
+      "reused": true
+    },
+    {
+      "file": "dock-hover.gif",
+      "kind": "gif",
+      "fps": 15,
+      "seconds": 9.8,
+      "actualWidgets": true,
+      "reused": true
+    },
+    {
+      "file": "fixed-pet.gif",
+      "kind": "gif",
+      "fps": 15,
+      "seconds": 9,
+      "actualWidgets": true,
+      "reused": true
+    },
+    {
+      "file": "interface-comparison.png",
+      "kind": "static",
+      "actualWidgets": true
+    },
+    {
+      "file": "chat-history.png",
+      "kind": "static",
+      "actualWidgets": true
+    },
+    {
+      "file": "tool-details.gif",
+      "kind": "gif",
+      "fps": 12,
+      "seconds": 5.5,
+      "actualWidgets": true,
+      "motionKinds": []
+    },
+    {
+      "file": "file-diff.png",
+      "kind": "static",
+      "actualWidgets": true
+    },
+    {
+      "file": "quota.png",
+      "kind": "static",
+      "actualWidgets": true
+    }
+  ]
+}

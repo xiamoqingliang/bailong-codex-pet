@@ -57,3 +57,9 @@ tools/alpha-cleanup/idle2-trial/
 *.webm
 analysis/
 publish/
+
+# Reproducible gallery output; selected media are in docs/images.
+docs/showcase/media/
+docs/style-samples/*.png
+docs/style-samples/*.gif
+docs/style-samples/samples.json
