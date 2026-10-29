@@ -2,6 +2,8 @@
 
 让白龙陪伴你的 Codex 工作：保留原作的动画、台词与音效，加入专属控制栏、跨项目任务卡、同会话聊天和统一的白紫色界面。
 
+![白龙桌宠 Codex 完整适配版宣传图](docs/images/v051-promo.png)
+
 基于 [jingh12312-rgb / bailong-desktop-pet](https://github.com/jingh12312-rgb/bailong-desktop-pet) **v0.5.1** 制作，适配版本为 **v0.5.1.1**。已获原作者同意以 fork 形式免费发布，不用于商业用途，非 OpenAI 官方产品。
 
 ## 下载
