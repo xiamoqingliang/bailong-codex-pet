@@ -17,12 +17,12 @@ class PetLifecycle:
     def _hide_exit_ui(self):
         # Hide before chat.shutdown() can wait for a thread. Stop the original
         # fullscreen timer too: it must not show the composer while closing.
-        for name in ("tick", "visibility_timer", "click_timer", "bubble_timer"):
+        for name in ("tick", "visibility_timer", "click_timer", "bubble_timer", "dock_click_timer", "_notice_timer", "_quota_hide_timer", "_quota_connect_timer", "_notification_timer"):
             timer = getattr(self, name, None)
             if timer is not None:
                 timer.stop()
         self.hide()
-        for name in ("tray", "bubble", "toolbar", "activity_cards", "tray_menu"):
+        for name in ("tray", "bubble", "notification_bubble", "toolbar", "activity_cards", "tray_menu", "settings_panel", "quota_panel"):
             window = getattr(self, name, None)
             if window is not None:
                 if hasattr(window, "set_active"):

@@ -22,6 +22,8 @@ import traceback
 import uuid
 
 LOCAL_ID = "custom:bailong-full"
+FALLBACK_SLUG = "bailong-full-local"
+FALLBACK_SLUG_RE = re.compile(r"bailong-full-local(?:-(?:[2-9]|1[0-6]))?\Z")
 MUTEX = r"Local\BailongCodexBridgeSupervisorV1"
 CLOUD_ID = re.compile(r"pet_[A-Za-z0-9_-]+\Z")
 MAX_CONFIG = 1024 * 1024
@@ -29,10 +31,11 @@ DESKTOP_KEYS = ("selected-avatar-id", "avatar-overlay-pet-visible")
 UNINSTALL_MARKER = "uninstall.request"
 REQUIRED_BRIDGE_FILES = (
     "bridge_loader.py bridge_pet.py pet_lifecycle.py bridge_policy.py bridge_supervisor.py "
-    "bailong_toolbar.py activity_animation.py activity_cards.py activity_runtime.py activity_source.py "
+    "bailong_toolbar.py activity_cards.py activity_runtime.py activity_source.py "
     "activity_ui_hints.ps1 codex_observer.ps1 native_mini_control.ps1 native_menu_shield.cs "
     "native_overlay_mask.py native_visibility.py desktop_ipc.py desktop_chat_adapter.py "
-    "desktop_chat_link.py detached_launcher.py asset_source.py bridge-config.json"
+    "desktop_chat_link.py conversation_sync.py chat_ui_style.py file_diff.py detached_launcher.py asset_source.py bridge-config.json "
+    "bailong_theme.py bailong_settings.py dock_controls.py v051_behavior.py companion_layout.py window_policy.py ui_motion.py quota_panel.py"
 ).split()
 
 
@@ -154,6 +157,71 @@ def choose_avatar(config: dict, global_bytes: bytes | None) -> str:
     return LOCAL_ID
 
 
+def fallback_records(receipt: dict) -> dict:
+    records = receipt.get('localFallbacks', {})
+    if not isinstance(records, dict) or len(records) > 16:
+        raise ValueError('Invalid local fallback receipt')
+    for slug, files in records.items():
+        if (not isinstance(slug, str) or not FALLBACK_SLUG_RE.fullmatch(slug)
+                or not isinstance(files, dict) or set(files) != {'pet.json', 'spritesheet.webp'}
+                or not all(isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value) for value in files.values())):
+            raise ValueError('Invalid local fallback ownership')
+    return copy.deepcopy(records)
+
+
+def local_fallback_plan(root, home, parsed, global_bytes, old_receipt, manifest, image, bridge_before):
+    """Add an unmapped, owned local entry; never alter cloud migration state."""
+    records = fallback_records(json.loads(old_receipt.decode('utf-8-sig'))) if old_receipt else {}
+    migrated = set()
+    try:
+        document = json.loads(global_bytes.decode('utf-8-sig')) if global_bytes else {}
+        maps = document.get('electron-persisted-atom-state', {}).get('migrated-cloud-pet-ids-v1', {})
+        for mapping in maps.values() if isinstance(maps, dict) else ():
+            if isinstance(mapping, dict):
+                migrated.update(key for key, value in mapping.items()
+                                if isinstance(key, str) and (key == LOCAL_ID or FALLBACK_SLUG_RE.fullmatch(key.removeprefix('custom:')))
+                                and isinstance(value, str) and CLOUD_ID.fullmatch(value))
+    except (ValueError, UnicodeError, AttributeError, TypeError):
+        pass
+    if LOCAL_ID not in migrated and not records:
+        return None, records, {}
+    selected = parsed.get('desktop', {}).get('selected-avatar-id', '')
+    slugs = [FALLBACK_SLUG, *(f'{FALLBACK_SLUG}-{index}' for index in range(2, 17))]
+    current_slug = selected.removeprefix('custom:') if isinstance(selected, str) else ''
+    if current_slug in records:
+        slugs.remove(current_slug)
+        slugs.insert(0, current_slug)
+    payload = {'pet.json': manifest, 'spritesheet.webp': image}
+    chosen = None
+    for slug in slugs:
+        if 'custom:' + slug in migrated:
+            continue
+        directory = safe_path(home / 'pets' / slug)
+        current = {name: read_small(directory / name, 32 * 1024 * 1024) for name in payload}
+        if slug in records:
+            if any(value is not None and hashlib.sha256(value).hexdigest() != records[slug][name]
+                   for name, value in current.items()):
+                continue  # Preserve user-modified entries and choose a fresh slot.
+        elif any(value is not None for value in current.values()) or directory.exists() and any(directory.iterdir()):
+            continue  # The prefix alone is not proof of ownership.
+        chosen = slug
+        break
+    if chosen is None:
+        raise InstallError('本地备用入口已被占用或迁移，未覆盖任何现有桌宠。')
+    records[chosen] = {name: hashlib.sha256(value).hexdigest() for name, value in payload.items()}
+    bridge_path = root / 'codex-integration/bridge/bridge-config.json'
+    bridge = json.loads(bridge_before.decode('utf-8-sig'))
+    ids = bridge.get('fullAvatarIds', [LOCAL_ID])
+    if not isinstance(ids, list) or not all(isinstance(value, str) and re.fullmatch(r'(?:custom:[A-Za-z0-9][A-Za-z0-9._-]*|pet_[A-Za-z0-9_-]+)', value) for value in ids):
+        raise InstallError('白龙入口识别配置无效，未修改安装。')
+    bridge['fullAvatarIds'] = list(dict.fromkeys([LOCAL_ID, *ids, *('custom:' + slug for slug in records)]))
+    if len(bridge['fullAvatarIds']) > 32:
+        raise InstallError('白龙入口识别数量超出限制，未修改安装。')
+    targets = {home / 'pets' / chosen / name: value for name, value in payload.items()}
+    targets[bridge_path] = (json.dumps(bridge, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    return 'custom:' + chosen, records, targets
+
+
 def update_config(raw: bytes | None, selected: str) -> bytes:
     raw = raw or b""
     try:
@@ -228,7 +296,9 @@ def receipt_before(raw: bytes | None, config: dict) -> dict:
         require(isinstance(value.get("dataRoot"), str) and Path(value["dataRoot"]).is_absolute())
         safe_path(Path(value["dataRoot"]))
         require(isinstance(value.get("avatarId"), str))
-        require(value["avatarId"] == LOCAL_ID or CLOUD_ID.fullmatch(value["avatarId"]))
+        fallbacks = fallback_records(value)
+        require(value["avatarId"] == LOCAL_ID or CLOUD_ID.fullmatch(value["avatarId"])
+                or value['avatarId'] in {'custom:' + slug for slug in fallbacks})
         require(all(isinstance(value["files"][name], str) and re.fullmatch(r"[a-fA-F0-9]{64}", value["files"][name])
                     for name in ("pet.json", "spritesheet.webp")))
         before = value["desktopBefore"]
@@ -322,44 +392,20 @@ def validate_package(root: Path):
                      "_internal/Qt6Core.dll", "_internal/PySide6/QtCore.cp313-win_amd64.pyd",
                      "_internal/PIL/_imaging.cp313-win_amd64.pyd", "_internal/PIL/_webp.cp313-win_amd64.pyd",
                      "codex-integration/bridge/bridge_supervisor.py", "codex-integration/bridge/bridge_pet.py",
-                     "codex-integration/bridge/bridge-config.json", "codex-integration/clean-assets/素材清单.json")
+                     "codex-integration/bridge/bridge-config.json", "outputs/白龙桌宠素材/素材清单.json", "tools/ffmpeg.exe")
     required += tuple("codex-integration/bridge/" + name for name in REQUIRED_BRIDGE_FILES)
     for relative in required:
         path = safe_path(root / relative)
         if not path.is_file():
             raise InstallError("安装包不完整，请完整解压后再运行唯一安装入口。")
-    asset_root = root / "codex-integration/clean-assets"
-    asset_raw = read_small(asset_root / "素材清单.json")
     try:
-        asset_manifest = json.loads(asset_raw.decode("utf-8-sig"))
-        validation = json.loads(read_small(asset_root / "repair-validation.json").decode("utf-8-sig"))
-        if validation.get("animations") != 25 or validation.get("frames") != 2529 or validation.get("manifestSha256") != hashlib.sha256(asset_raw).hexdigest():
-            raise ValueError("invalid repair metadata")
-        records = []
-        def visit(value):
-            if isinstance(value, dict):
-                if "file" in value:
-                    records.append(value)
-                for child in value.values():
-                    visit(child)
-            elif isinstance(value, list):
-                for child in value:
-                    visit(child)
-        visit(asset_manifest)
-        if len(records) != 25:
-            raise ValueError("missing animation records")
-        for record in records:
-            for key in ("file", "playbackFile"):
-                if key not in record:
-                    continue
-                relative = Path(record[key])
-                if relative.is_absolute() or relative.drive or ".." in relative.parts:
-                    raise ValueError("invalid animation path")
-                animation = safe_path(asset_root / relative)
-                if not animation.is_relative_to(asset_root) or not animation.is_file() or animation.stat().st_size == 0:
-                    raise ValueError("missing animation file")
-    except (ValueError, TypeError, AttributeError, UnicodeError) as error:
-        raise InstallError("去噪动画不完整或清单异常，请重新完整解压。") from error
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('package_webm_assets', root / 'codex-integration/bridge/asset_source.py')
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        validator.validate_webm_assets(root)
+    except (OSError, ValueError, TypeError) as error:
+        raise InstallError('透明 WebM 动画或解码器不完整，请重新完整解压。') from error
     entry = root / "codex-integration/full-entry"
     manifest = read_small(entry / "pet.json")
     try:
@@ -568,30 +614,40 @@ def install(root: Path, user_home: Path, startup_dir: Path, *, check=False, runt
     parsed = tomllib.loads((before_config or b"").decode("utf-8-sig"))
     global_bytes = read_small(home / ".codex-global-state.json", 32 * 1024 * 1024)
     selected = choose_avatar(parsed, global_bytes)
-    config = update_config(before_config, selected)
     startup_path = startup_dir / "BailongCodexBridge.vbs"
     old_startup = read_small(startup_path)
     old = validate_old(parse_old_startup(old_startup), root)
     receipt_path = home / "pet-install-receipts/bailong-full.json"
     old_receipt = read_small(receipt_path)
+    original_desktop = receipt_before(old_receipt, parsed)
+    bridge_config_path = root / 'codex-integration/bridge/bridge-config.json'
+    bridge_before = read_small(bridge_config_path)
+    fallback_id, fallbacks, fallback_targets = local_fallback_plan(
+        root, home, parsed, global_bytes, old_receipt, manifest, image, bridge_before)
+    selected = fallback_id or selected
+    config = update_config(before_config, selected)
     receipt = {"schemaVersion": 1, "edition": "full", "dataRoot": str(root), "avatarId": selected,
                "files": {"pet.json": hashlib.sha256(manifest).hexdigest(),
                          "spritesheet.webp": hashlib.sha256(image).hexdigest()},
-               "desktopBefore": receipt_before(old_receipt, parsed),
+               "desktopBefore": original_desktop,
                "desktopInstalled": {"selected-avatar-id": selected, "avatar-overlay-pet-visible": True}}
+    if fallbacks:
+        receipt['localFallbacks'] = fallbacks
     receipt_bytes = (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     uninstall_marker = root / UNINSTALL_MARKER
     old_marker = read_small(uninstall_marker, 65536)
     targets = {
         home / "pets/bailong-full/pet.json": manifest,
         home / "pets/bailong-full/spritesheet.webp": image,
+        **fallback_targets,
         config_path: config,
         startup_path: startup_bytes(root),
         receipt_path: receipt_bytes,
     }
     originals = {path: read_small(path, 32 * 1024 * 1024) for path in targets}
     if (originals[config_path] != before_config or originals[startup_path] != old_startup
-            or originals[receipt_path] != old_receipt):
+            or originals[receipt_path] != old_receipt
+            or bridge_config_path in originals and originals[bridge_config_path] != bridge_before):
         raise InstallError("Codex 设置正在变化，请稍后再运行安装；未修改任何文件。")
     changed = [path for path in targets if originals[path] != targets[path]]
     result = {"ok": True, "checkOnly": check, "filesChanged": len(changed),
@@ -666,7 +722,9 @@ def main():
     parser.add_argument("--old-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--old-pythonw", type=Path, help=argparse.SUPPRESS)
     options = parser.parse_args()
-    root = Path(__file__).parent
+    root = Path(__file__).resolve().parent
+    if root.name == "packaging":
+        root = root.parent
     try:
         root = safe_path(root)
         if os.name != "nt":
@@ -700,7 +758,7 @@ def main():
             print("安装完成：白龙已设为默认显示，并已启用随 Codex 启动。")
             if result["activation"] == "waiting-for-existing-pet":
                 print("当前旧版继续运行；正常关闭 Codex 后自动切换，无需再执行命令。")
-            print("若 Codex 列表尚未刷新，请在当前任务结束后正常关闭并重新打开 Codex。")
+            print("若 Mini 列表尚未更新，请在“设置 → Mini 与虚拟宠物”中点击“刷新”。")
             print("请保留此解压目录。删除前先运行“一键卸载白龙.cmd”，等待卸载窗口结束。")
         return 0
     except Exception as error:

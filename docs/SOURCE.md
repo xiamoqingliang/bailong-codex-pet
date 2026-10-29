@@ -1,15 +1,16 @@
-# 适配层源码
+# 适配层源码与文档
 
-本仓库公开 Codex 适配层和安装脚本。原作引擎、运行环境及动画素材随 Releases 的安装包提供，不重复放入 Git 历史。
+本仓库公开 v0.5.1.1 的适配代码、测试、打包与安装脚本，以及架构和流程文档。
+原作者引擎 v0.5.1、运行环境、音效与动画随完整安装包提供，不纳入 Git 历史。
 
-- `codex-integration/bridge/`：完整版的原作加载、Codex 联动、专属控制栏、任务卡和聊天适配。
-- `packaging/compact_install.py`：完整版安装脚本，对应安装包中的 `data/install.py`。
-- `packaging/native_install.ps1`：原生简化版安装脚本，对应安装包中的 `data/install.ps1`。
-- `packaging/uninstall_pet.ps1`：两版共用的卸载脚本，停止对应助手并清理匹配的本地注册。
-- `packaging/package_commands.py`：生成安装包内的卸载 CMD 入口，让卸载脚本从临时目录运行。
-- `tools/alpha-cleanup/`：独立的白龙透明边缘清理工具、依赖说明与测试，不需要 Codex。
-- `ASSETS.md`：保留原作的素材说明；本适配项目的发布与署名说明见 `NOTICE.md`。
+- `codex-integration/bridge/`：监督、状态观察、引擎加载、行为、窗口、聊天与历史适配。
+- `codex-integration/edge-repair/`：透明 WebM 审计和去噪开发工具。
+- `packaging/`：安装、卸载、打包与隔离验证。
+- `docs/项目架构与流程-v0.5.1.1.md`、`docs/diagrams/`：架构与流程，包含 PNG、SVG、Mermaid。
 
-需要运行或调试完整版时，先下载并解压完整版安装包；其 `data` 目录提供所需引擎、素材和运行时。仓库中的适配文件与包内的 `data/codex-integration/bridge/` 对应，普通使用者直接使用安装包即可。
+开发时先完整解压 Release 安装包，将本仓库对应文件复制到其 `data` 目录，
+以便使用内置引擎、Python、解码器与动画；普通使用者直接使用完整安装包即可。
+动画工具的额外开发依赖为 OpenCV、NumPy、Pillow。
 
-原作项目及引擎相关说明请查看 [上游项目](https://github.com/jingh12312-rgb/bailong-desktop-pet)。
+本版 Release 手动附件仅提供完整安装包与 SHA-256 校验文件。
+旧原生简化版及早期去噪工具代码保留历史用途，本版不新增对应下载附件。

@@ -49,10 +49,11 @@ class InstallerTests(unittest.TestCase):
                          "_internal/Qt6Core.dll", "_internal/PySide6/QtCore.cp313-win_amd64.pyd",
                          "_internal/PIL/_imaging.cp313-win_amd64.pyd", "_internal/PIL/_webp.cp313-win_amd64.pyd",
                          "codex-integration/bridge/bridge_supervisor.py", "codex-integration/bridge/bridge_pet.py",
-                         "codex-integration/bridge/bridge-config.json", "codex-integration/clean-assets/素材清单.json"):
+                         "codex-integration/bridge/bridge-config.json", "outputs/白龙桌宠素材/素材清单.json", "tools/ffmpeg.exe"):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"fixture")
+        (self.root / "codex-integration/bridge/bridge-config.json").write_text("{}", encoding="utf-8")
         supervisor = self.root / "codex-integration/bridge/bridge_supervisor.py"
         supervisor.write_text('MUTEX_NAME = "BailongCodexBridgeSupervisorV1"\nSTOP_NAMES = ("supervisor.stop",)\n', encoding="utf-8")
         (self.root / "uninstall.ps1").write_text("# fixture uninstaller", encoding="utf-8")
@@ -60,14 +61,16 @@ class InstallerTests(unittest.TestCase):
             path = self.root / "codex-integration/bridge" / name
             if not path.exists():
                 path.write_text("# fixture dependency", encoding="utf-8")
-        assets = self.root / "codex-integration/clean-assets"
-        animation_records = [{"file": f"animation{i}.webp"} for i in range(25)]
+        import shutil
+        shutil.copy2(Path(__file__).resolve().parents[1] / "codex-integration/bridge/asset_source.py", self.root / "codex-integration/bridge/asset_source.py")
+        assets = self.root / "outputs/白龙桌宠素材"
+        animation_records = [{"file": f"animation{i}.webm"} for i in range(35)]
         manifest_data = json.dumps({"animations": animation_records}).encode()
         (assets / "素材清单.json").write_bytes(manifest_data)
-        (assets / "repair-validation.json").write_text(json.dumps({"animations": 25, "frames": 2529,
+        (assets / "repair-validation.json").write_text(json.dumps({"animations": 35, "rgbExactAfterDecoding": True, "alphaExactAfterDecoding": True,
                                                                   "manifestSha256": hashlib.sha256(manifest_data).hexdigest()}))
         for record in animation_records:
-            (assets / record["file"]).write_bytes(b"fixture")
+            (assets / record["file"]).write_bytes(b"\x1aE\xdf\xa3" + b"fixture" * 4)
         entry = self.root / "codex-integration/full-entry"
         entry.mkdir()
         (entry / "pet.json").write_text(json.dumps({"displayName": "白龙完整版", "spriteVersionNumber": 1,
@@ -413,6 +416,112 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(b"not json", (self.home / ".codex-global-state.json").read_bytes())
         self.assertEqual(setup.LOCAL_ID, tomllib.loads((self.home / "config.toml").read_text())["desktop"]["selected-avatar-id"])
 
+    def migrated_state(self, extra=None):
+        self.home.mkdir(parents=True, exist_ok=True)
+        mapping = {setup.LOCAL_ID: 'pet_old_full', **(extra or {})}
+        raw = json.dumps({'electron-persisted-atom-state': {'migrated-cloud-pet-ids-v1': {
+            'fixture-scope': mapping}}}).encode()
+        path = self.home / '.codex-global-state.json'
+        path.write_bytes(raw)
+        return path, raw
+
+    def test_migrated_pet_gets_owned_local_fallback_and_repeat_is_idempotent(self):
+        state, original = self.migrated_state()
+        self.install()
+        config = tomllib.loads((self.home / 'config.toml').read_text())
+        self.assertEqual(config['desktop']['selected-avatar-id'], 'custom:bailong-full-local')
+        receipt = json.loads((self.home / 'pet-install-receipts/bailong-full.json').read_text())
+        self.assertIn('bailong-full-local', receipt['localFallbacks'])
+        for name in ('pet.json', 'spritesheet.webp'):
+            path = self.home / 'pets/bailong-full-local' / name
+            self.assertEqual(setup.sha(path), receipt['localFallbacks']['bailong-full-local'][name])
+        bridge = json.loads((self.root / 'codex-integration/bridge/bridge-config.json').read_text())
+        self.assertEqual(bridge['fullAvatarIds'], [setup.LOCAL_ID, 'custom:bailong-full-local'])
+        self.assertEqual(self.install()['filesChanged'], 0)
+        self.assertEqual(state.read_bytes(), original)
+
+    def test_mapped_fallback_rotates_without_clearing_cloud_records(self):
+        state, original = self.migrated_state({'custom:bailong-full-local': 'pet_local_migrated'})
+        self.install()
+        config = tomllib.loads((self.home / 'config.toml').read_text())
+        self.assertEqual(config['desktop']['selected-avatar-id'], 'custom:bailong-full-local-2')
+        self.assertEqual(state.read_bytes(), original)
+
+    def test_unowned_or_modified_fallback_is_preserved(self):
+        self.migrated_state()
+        occupied = self.home / 'pets/bailong-full-local'
+        occupied.mkdir(parents=True)
+        (occupied / 'personal.txt').write_text('keep')
+        self.install()
+        self.assertEqual((occupied / 'personal.txt').read_text(), 'keep')
+        modified = self.home / 'pets/bailong-full-local-2/spritesheet.webp'
+        modified.write_bytes(b'user-edited-sprite')
+        self.install()
+        self.assertEqual(modified.read_bytes(), b'user-edited-sprite')
+        config = tomllib.loads((self.home / 'config.toml').read_text())
+        self.assertEqual(config['desktop']['selected-avatar-id'], 'custom:bailong-full-local-3')
+
+    def test_fallback_registration_rolls_back_assets_bridge_and_selection_on_failure(self):
+        state, original_state = self.migrated_state()
+        bridge = self.root / 'codex-integration/bridge/bridge-config.json'
+        original_bridge = bridge.read_bytes()
+        self.config(b'model="keep"\n')
+        original = setup.atomic_write
+        def reject_receipt(path, data):
+            if path.parent.name == 'pet-install-receipts':
+                raise OSError('fixture receipt write failure')
+            original(path, data)
+        with mock.patch.object(setup, 'atomic_write', side_effect=reject_receipt):
+            with self.assertRaises(OSError):
+                self.install()
+        self.assertEqual(bridge.read_bytes(), original_bridge)
+        self.assertEqual((self.home / 'config.toml').read_bytes(), b'model="keep"\n')
+        self.assertFalse((self.home / 'pets/bailong-full-local/pet.json').exists())
+        self.assertEqual(state.read_bytes(), original_state)
+
+    def test_fallback_receipt_cannot_claim_an_unrelated_directory(self):
+        self.install()
+        path = self.home / 'pet-install-receipts/bailong-full.json'
+        value = json.loads(path.read_text())
+        value['localFallbacks'] = {'../other': value['files']}
+        path.write_text(json.dumps(value))
+        before = (self.home / 'config.toml').read_bytes()
+        with self.assertRaises(setup.InstallError):
+            self.install()
+        self.assertEqual((self.home / 'config.toml').read_bytes(), before)
+
+    @unittest.skipUnless(os.name == 'nt', 'PowerShell uninstaller')
+    def test_fallback_uninstall_removes_only_owned_entries_and_restores_previous_selection(self):
+        self.config(b'[desktop]\nselected-avatar-id="custom:previous"\navatar-overlay-pet-visible=false\n')
+        state, raw = self.migrated_state()
+        self.install()
+        script = Path(__file__).with_name('uninstall_pet.ps1')
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
+                                 '-DataRoot', str(self.root), '-Edition', 'full', '-CodexHome', str(self.home),
+                                 '-StartupDirectory', str(self.startup)], capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        self.assertFalse((self.home / 'pets/bailong-full-local/pet.json').exists())
+        self.assertFalse((self.home / 'pets/bailong-full/pet.json').exists())
+        config = tomllib.loads((self.home / 'config.toml').read_text())
+        self.assertEqual(config['desktop']['selected-avatar-id'], 'custom:previous')
+        self.assertFalse(config['desktop']['avatar-overlay-pet-visible'])
+        self.assertEqual(state.read_bytes(), raw)
+
+    @unittest.skipUnless(os.name == 'nt', 'PowerShell uninstaller')
+    def test_modified_fallback_prevents_destructive_unregistration(self):
+        self.migrated_state()
+        self.install()
+        changed = self.home / 'pets/bailong-full-local/spritesheet.webp'
+        changed.write_bytes(b'keep user edits')
+        script = Path(__file__).with_name('uninstall_pet.ps1')
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
+                                 '-DataRoot', str(self.root), '-Edition', 'full', '-CodexHome', str(self.home),
+                                 '-StartupDirectory', str(self.startup)], capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        self.assertIn(b'PreservedModifiedAssets', result.stdout)
+        self.assertEqual(changed.read_bytes(), b'keep user edits')
+        self.assertTrue((self.home / 'pet-install-receipts/bailong-full.json').exists())
+
     def test_unsafe_manifest_path_is_rejected(self):
         path = self.root / "codex-integration/full-entry/pet.json"
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -499,7 +608,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual([], self.runtime.launches)
 
     def test_missing_animation_is_rejected_before_installation(self):
-        (self.root / "codex-integration/clean-assets/animation3.webp").unlink()
+        (self.root / "outputs/白龙桌宠素材/animation3.webm").unlink()
         with self.assertRaises(setup.InstallError):
             self.install()
         self.assertFalse(self.user.exists())

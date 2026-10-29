@@ -51,3 +51,9 @@ pet-install-receipts/
 # 去噪工具本地产生的预览、素材与路径报告。
 tools/alpha-cleanup/clean-assets/
 tools/alpha-cleanup/idle2-trial/
+
+# v0.5.1.1 架构文档与本机开发输出。
+!docs/diagrams/*.png
+*.webm
+analysis/
+publish/

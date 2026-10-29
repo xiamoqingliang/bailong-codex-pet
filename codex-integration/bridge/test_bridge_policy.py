@@ -48,6 +48,16 @@ class FullModeTests(unittest.TestCase):
         self.state["selectedAvatarId"] = "pet_full123"
         self.state["fullBailongMigratedIds"] = ["pet_full123"]
         self.assertTrue(policy.full_mode_visible(self.state))
+
+    def test_local_fallback_requires_exact_registration_and_accepts_projected_migration(self):
+        self.config.write_text(json.dumps({'fullAvatarIds': [policy.FULL_LOCAL_ID, 'custom:bailong-full-local']}), encoding='utf-8')
+        self.state['selectedAvatarId'] = 'custom:bailong-full-local'
+        self.assertTrue(policy.full_mode_visible(self.state))
+        self.state['selectedAvatarId'] = 'custom:bailong-full-local-2'
+        self.assertFalse(policy.full_mode_visible(self.state))
+        self.state['selectedAvatarId'] = 'pet_fallback_cloud'
+        self.state['fullBailongMigratedIds'] = ['pet_fallback_cloud']
+        self.assertTrue(policy.full_mode_visible(self.state))
         for selected in ("pet_other", "pet_full123-copy", "custom:bailong"):
             self.state["selectedAvatarId"] = selected
             self.assertFalse(policy.full_mode_visible(self.state))
@@ -157,11 +167,14 @@ class DesktopProjectionTests(unittest.TestCase):
         fixture.write_text(json.dumps({
             "electron-avatar-overlay-open": True,
             "electron-persisted-atom-state": {"migrated-cloud-pet-ids-v1": {
-                "fixture-account-a": {"custom:bailong-full": "pet_fullA", "custom:bailong": "pet_other"},
+                "fixture-account-a": {"custom:bailong-full": "pet_fullA", "custom:bailong": "pet_other",
+                                      "custom:bailong-full-local": "pet_local", "custom:bailong-full-local-2": "pet_unconfigured"},
                 "fixture-account-b": {"custom:bailong-full": "pet_fullB"},
                 "fixture-account-c": {"custom:bailong-full": "codex"},
             }},
         }), encoding="utf-8")
+        bridge_config = Path(self.directory.name) / 'bridge-fallback.json'
+        bridge_config.write_text(json.dumps({'fullAvatarIds': [policy.FULL_LOCAL_ID, 'custom:bailong-full-local']}), encoding='utf-8')
         source = Path(policy.__file__).with_name("codex_observer.ps1")
         # Extract only the read-only projection function; do not start the
         # observer loop, scan windows or touch real Codex state in this test.
@@ -181,17 +194,21 @@ $requestedOpen = $null
 $fullBailongMigratedIds = @()
 Read-GlobalPetIntent
 $good = [ordered]@{requestedOpen=$requestedOpen; ids=@($fullBailongMigratedIds)}
+$globalStateStamp = $null
+Read-GlobalPetIntent -BridgeConfigPath '__BRIDGE_CONFIG__'
+$fallback = [ordered]@{requestedOpen=$requestedOpen; ids=@($fullBailongMigratedIds)}
 [IO.File]::WriteAllText($globalStatePath, '{broken')
 $globalStateStamp = $null
 Read-GlobalPetIntent
 $bad = [ordered]@{requestedOpen=$requestedOpen; ids=@($fullBailongMigratedIds)}
-ConvertTo-Json -Compress -Depth 4 @{good=$good; bad=$bad}
-""".replace("__SOURCE__", str(source).replace("'", "''")).replace("__FIXTURE__", str(fixture).replace("'", "''"))
+ConvertTo-Json -Compress -Depth 4 @{good=$good; fallback=$fallback; bad=$bad}
+""".replace("__SOURCE__", str(source).replace("'", "''")).replace("__FIXTURE__", str(fixture).replace("'", "''")).replace('__BRIDGE_CONFIG__', str(bridge_config).replace("'", "''"))
         result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script],
                                 capture_output=True, text=True, check=True, timeout=15)
         value = json.loads(result.stdout)
         self.assertEqual(value["good"], {"requestedOpen": True, "ids": ["pet_fullA", "pet_fullB"]})
         self.assertEqual(value["bad"], {"requestedOpen": None, "ids": []})
+        self.assertEqual(value['fallback'], {'requestedOpen': True, 'ids': ['pet_fullA', 'pet_fullB', 'pet_local']})
         self.assertNotIn("fixture-account", result.stdout)
 
 

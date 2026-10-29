@@ -150,11 +150,33 @@ class WindowsJobTests(unittest.TestCase):
     def run_fixture(self, mode):
         with tempfile.TemporaryDirectory(prefix="BailongJobFixture-") as name:
             folder = Path(name)
-            launcher._launch_wmi(sys.executable,
+            launched = launcher._launch_wmi(sys.executable,
                 [str(Path(__file__).resolve()), "--fixture", mode, str(folder)], folder)
-            result = wait_json(folder / "result.json", timeout=55)
-            self.assertNotIn("error", result)
-            return result
+            api = launcher.WindowsProcessApi()
+            api.api.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            api.api.OpenProcess.restype = wintypes.HANDLE
+            api.api.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            api.api.WaitForSingleObject.restype = wintypes.DWORD
+            handles = []
+            try:
+                handle = api.api.OpenProcess(0x100000, False, launched['pid'])
+                if handle:
+                    handles.append(handle)
+                ready = wait_json(folder / 'survivor-ready.json', timeout=55)
+                handle = api.api.OpenProcess(0x100000, False, ready['pid'])
+                if handle:
+                    handles.append(handle)
+                result = wait_json(folder / "result.json", timeout=55)
+                self.assertNotIn("error", result)
+                # A result file precedes controller/survivor process exit.
+                # Wait on these creation-bound fixture handles before Temp
+                # cleanup so Windows has released their working directory.
+                for handle in handles:
+                    self.assertEqual(api.api.WaitForSingleObject(handle, 5000), 0)
+                return result
+            finally:
+                for handle in handles:
+                    api.close(handle)
 
     def test_non_killing_service_job_is_accepted_and_survives_close(self):
         result = self.run_fixture("benign-controller")

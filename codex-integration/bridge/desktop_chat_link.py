@@ -147,6 +147,7 @@ def make_session_class(backend, *, client_factory=DesktopIpcClient,
                 if not isinstance(turn_id, str) or not _ID.fullmatch(turn_id):
                     raise DesktopOutcomeUnknown("Desktop did not return a recognized turn")
                 self.turn_id = turn_id
+                self.emit('codex_turn', turn_id)
                 self._desktop_stream.bind_turn(turn_id)
                 deadline = clock() + inactivity_timeout
                 while not self._desktop_stream.terminal:

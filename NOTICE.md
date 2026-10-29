@@ -1,6 +1,6 @@
 # 署名与许可说明
 
-本项目基于 jingh12312-rgb 发布的白龙桌宠 v0.4.1 制作。
+本项目基于 jingh12312-rgb 发布的白龙桌宠 v0.5.1 制作。
 
 - 原项目：https://github.com/jingh12312-rgb/bailong-desktop-pet
 - Codex 适配项目：https://github.com/xiamoqingliang/bailong-codex-pet

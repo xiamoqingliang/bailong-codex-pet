@@ -5,7 +5,8 @@ Qt is imported only inside ``create_toolbar``. The returned QWidget exposes
 ``sync_geometry()``, ``sync_visibility(active=None)``, ``set_active(active)``,
 and ``constrained_owner_position(position, pointer=None)``. Keep a reference on
 the pet. In the LinkedPet.constrained_position override, pass the point returned
-by super() to constrained_owner_position to reserve the toolbar and composer.
+by super() to constrained_owner_position. Companion windows reflow separately
+and do not reserve space in the pet's drag boundary.
 
 No chat or quota request is made until the user clicks an appropriate control.
 The original engine owns animation, history, chat, quota, menus and sounds.
@@ -27,13 +28,14 @@ def create_toolbar(original, pet, on_hide=None):
     persist/synchronize the user's hide action. The default uses the original
     tray-recoverable ``pet.set_manual_hidden(True)``.
     """
-    from PySide6.QtCore import QEvent, QPoint, Qt
+    from ui_motion import MotionWindowMixin
+    from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import (
         QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QWidget,
     )
 
-    class BailongToolbar(QWidget):
+    class BailongToolbar(MotionWindowMixin, QWidget):
         def __init__(self):
             super().__init__(pet, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
                              | Qt.WindowType.WindowStaysOnTopHint)
@@ -41,6 +43,7 @@ def create_toolbar(original, pet, on_hide=None):
             self.on_hide = on_hide
             self._active = True
             self._syncing = False
+            self._space_available = True
             self._composer = None
             self._action_menu = None
             self._press_global = None
@@ -71,9 +74,9 @@ def create_toolbar(original, pet, on_hide=None):
             self.buttons = {}
             actions = (
                 ("chat", "聊天", "在白龙中操作同一 Codex 聊天并同步回复，可选择工作文件夹", self._toggle_chat),
-                ("history", "历史", "打开白龙原版历史对话", self._open_history),
                 ("quota", "额度", "查询 Codex 剩余额度（点击后联网查询）", self._quota),
-                ("actions", "动作", "白龙完整动作、待机和显示设置菜单", self._open_actions),
+                ("actions", "动作", "选择互动、工作、待机和移动动作", self._open_actions),
+                ("settings", "设置", "大小、移动、提醒与音效设置", self.owner.show_settings),
             )
             for key, text, tooltip, callback in actions:
                 button = QPushButton(text, self.panel)
@@ -137,50 +140,27 @@ def create_toolbar(original, pet, on_hide=None):
             return composer if chat and chat.enabled else None
 
         def constrained_owner_position(self, position, pointer=None):
-            """Clamp a point after the original Pet clamp, reserving our bar.
-
-            The group remains centered under the pet. Coordinates and sizes
-            are Qt logical pixels, including on mixed-DPI monitor setups.
-            """
-            position = QPoint(position)
-            screen = QApplication.screenAt(pointer) if pointer is not None else None
-            if screen is None:
-                screen = QApplication.screenAt(position + self.owner.rect().center())
-            if screen is None:
-                screen = self.owner.screen() or QApplication.primaryScreen()
-            if screen is None:
-                return position
-            area = screen.availableGeometry()
-            composer = self._current_composer()
-            width = max(self.owner.width(), self.width(), composer.width() if composer else 0)
-            height = self.owner.height() + PET_GAP + self.height()
-            if composer:
-                height += COMPOSER_GAP + composer.height()
-            shift = (width - self.owner.width()) // 2
-            left = area.left() + shift
-            right = max(left, area.right() + 1 - width + shift)
-            bottom = max(area.top(), area.bottom() + 1 - height)
-            return QPoint(max(left, min(position.x(), right)),
-                          max(area.top(), min(position.y(), bottom)))
+            """Keep the pet-only boundary in Qt logical screen coordinates."""
+            return QPoint(position)
 
         def sync_geometry(self):
-            """Attach the bar and original composer below the pet immediately."""
+            """Reflow controls and composer around the pet's current position."""
             if self._syncing:
                 return
             self._syncing = True
             try:
                 composer = self._current_composer()
-                position = self.constrained_owner_position(self.owner.pos())
-                if position != self.owner.pos():
-                    self.owner.move(position)
-                x = self.owner.x() + (self.owner.width() - self.width()) // 2
-                y = self.owner.y() + self.owner.height() + PET_GAP
-                if self.pos() != QPoint(x, y):
-                    self.move(x, y)
-                if composer is not None:
-                    composer.move(self.owner.x() + (self.owner.width() - composer.width()) // 2,
-                                  y + self.height() + COMPOSER_GAP)
+                screen = self.owner.screen() or QApplication.primaryScreen()
+                if screen is None:
+                    return
+                area = screen.availableGeometry()
+                from companion_layout import layout_companions
+                layout_companions(self.owner, toolbar=self)
                 self.buttons["chat"].setChecked(composer is not None)
+                policy = getattr(self.owner, '_window_policy', None)
+                if policy is not None:
+                    policy.watch(composer)
+                    policy.schedule_stack()
             finally:
                 self._syncing = False
 
@@ -190,11 +170,15 @@ def create_toolbar(original, pet, on_hide=None):
                 self._active = bool(active)
             visible = (self._active and self.owner.isVisible()
                        and not getattr(self.owner, "manual_hidden", False)
-                       and not getattr(self.owner, "fullscreen_hidden", False))
+                       and not getattr(self.owner, "fullscreen_hidden", False)
+                       and not getattr(self.owner, "_local_hide_animation", False)
+                       and (not getattr(self.owner, "dock_edge", None) or
+                            bool(getattr(getattr(self.owner, "dock_controls", None), "visible", False))))
             if visible:
                 self.sync_geometry()
-            if visible != self.isVisible():
-                self.setVisible(visible)
+                visible = self._space_available
+            from bailong_theme import reveal_window
+            reveal_window(self, visible)
             if not visible:
                 self._press_global = None
                 self._dragging = False
@@ -205,10 +189,30 @@ def create_toolbar(original, pet, on_hide=None):
             self.sync_visibility(active)
 
         def request_hide(self):
+            if getattr(self.owner, '_local_hide_animation', False):
+                return
+            self.owner._local_hide_animation = True
+            self.sync_visibility()
+            cards = getattr(self.owner, 'activity_cards', None)
+            if cards is not None:
+                cards.sync_visibility()
+            if not hasattr(self, '_hide_timer'):
+                self._hide_timer = QTimer(self)
+                self._hide_timer.setSingleShot(True)
+                self._hide_timer.timeout.connect(self._finish_hide)
+            from ui_motion import CLOSE_MS
+            self._hide_timer.start(CLOSE_MS + 20)
+
+        def _finish_hide(self):
+            self._hide_timer.stop()
+            if getattr(self.owner, 'exit_reason', None) is not None:
+                self.owner._local_hide_animation = False
+                return
             if self.on_hide is not None:
                 self.on_hide()
             else:
                 self.owner.set_manual_hidden(True)
+            self.owner._local_hide_animation = False
             self.sync_visibility()
 
         def _toggle_chat(self):
@@ -216,26 +220,17 @@ def create_toolbar(original, pet, on_hide=None):
             self.sync_geometry()
             self.sync_visibility()
 
-        def _open_history(self):
-            self.owner.open_history()
-            self.sync_geometry()
-
         def _quota(self):
             self.owner.quota()
 
         def _open_actions(self):
             if self._action_menu is not None:
                 self._action_menu.close()
-            menu = self.owner.context_menu()
+            self.owner.note_interaction()
+            menu = self.owner.actions_menu()
             self._action_menu = menu
-            menu.setStyleSheet("""
-                QMenu { background: #fbf9ff; color: #574369;
-                        border: 1px solid #c7b6e5; padding: 5px; }
-                QMenu::item { padding: 6px 22px 6px 12px; border-radius: 5px; }
-                QMenu::item:selected { background: #e5d8f4; }
-                QMenu::separator { background: #ded2ed; height: 1px; margin: 4px; }
-                QMenu::item:disabled { color: #a398ac; }
-            """)
+            from bailong_theme import MENU_STYLE
+            menu.setStyleSheet(MENU_STYLE)
 
             def release_menu():
                 if self._action_menu is menu:
@@ -249,6 +244,8 @@ def create_toolbar(original, pet, on_hide=None):
         def _drag_event(self, event):
             kind = event.type()
             if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self.owner.undock()
+                self.owner.note_interaction()
                 self._press_global = event.globalPosition().toPoint()
                 self._press_origin = self.owner.pos()
                 self._dragging = False
@@ -305,4 +302,9 @@ def create_toolbar(original, pet, on_hide=None):
             event.ignore()
             self.request_hide()
 
-    return BailongToolbar()
+    toolbar = BailongToolbar()
+    policy = getattr(pet, 'window_policy', None)
+    if policy is not None:
+        policy().watch(toolbar, 'toolbar')
+        policy().schedule_stack()
+    return toolbar

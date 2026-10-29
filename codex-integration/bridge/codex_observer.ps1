@@ -250,6 +250,7 @@ function Read-DesktopSelection {
 }
 
 function Read-GlobalPetIntent {
+    param([string]$BridgeConfigPath = '')
     $now = [DateTime]::UtcNow
     try {
         $info = Get-Item -LiteralPath $globalStatePath -ErrorAction Stop
@@ -265,10 +266,25 @@ function Read-GlobalPetIntent {
             if ($null -ne $migrationMap -and $migrationMap -isnot [PSCustomObject]) {
                 throw [FormatException]::new('Invalid pet migration state')
             }
+            $localIds = @('custom:bailong-full')
+            if ([string]::IsNullOrWhiteSpace($BridgeConfigPath) -and -not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+                $BridgeConfigPath = Join-Path $PSScriptRoot 'bridge-config.json'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($BridgeConfigPath) -and [IO.File]::Exists($BridgeConfigPath)) {
+                $bridge = [IO.File]::ReadAllText($BridgeConfigPath) | ConvertFrom-Json -ErrorAction Stop
+                $localIds += @($bridge.fullAvatarIds | Where-Object {
+                    $_ -is [string] -and $_ -cmatch '^custom:bailong-full-local(?:-(?:[2-9]|1[0-6]))?$'
+                })
+            }
             $nextIds = @(
                 foreach ($accountMap in $migrationMap.PSObject.Properties) {
-                    $mapped = $accountMap.Value.'custom:bailong-full'
-                    if ($mapped -is [string] -and $mapped -cmatch '^pet_[A-Za-z0-9_-]+$') { $mapped }
+                    foreach ($localId in $localIds) {
+                        $entry = $accountMap.Value.PSObject.Properties[$localId]
+                        if ($null -ne $entry) {
+                            $mapped = $entry.Value
+                            if ($mapped -is [string] -and $mapped -cmatch '^pet_[A-Za-z0-9_-]+$') { $mapped }
+                        }
+                    }
                 }
             ) | Sort-Object -Unique
             $script:requestedOpen = $nextOpen

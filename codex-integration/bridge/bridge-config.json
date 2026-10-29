@@ -4,5 +4,6 @@
   ],
   "fullAvatarSlug": "bailong-full",
   "mode": "dedicated-toolbar",
-  "assetsDirectory": "codex-integration/clean-assets"
+  "upstreamVersion": "0.5.1",
+  "assetsDirectory": "outputs/白龙桌宠素材"
 }

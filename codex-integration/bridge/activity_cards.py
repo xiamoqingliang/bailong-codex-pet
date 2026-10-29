@@ -81,27 +81,9 @@ def choose_stack_position(owner, size, available, obstacles=()):
     Prefer above, then either side. Below the controls is a narrow-screen
     fallback; the least-overlapping position is used only if none can fit.
     """
-    px, py, pw, ph = owner
-    width, height = size
-    sx, sy, sw, sh = available
-    centered = px + (pw - width) // 2
-    bottom = max([py + ph] + [r[1] + r[3] for r in obstacles])
-    candidates = [
-        (centered, py - height - GAP),
-        (px - width - GAP, py - min(20, height // 4)),
-        (px + pw + GAP, py - min(20, height // 4)),
-        (centered, bottom + GAP),
-    ]
-    protected = [owner, *obstacles]
-    ranked = []
-    for rank, (x, y) in enumerate(candidates):
-        x = max(sx, min(x, sx + max(0, sw - width)))
-        y = max(sy, min(y, sy + max(0, sh - height)))
-        rect = (x, y, width, height)
-        overlap = sum(_intersection_area(rect, obstacle) for obstacle in protected)
-        ranked.append((overlap, rank, int(x), int(y)))
-    _, _, x, y = min(ranked)
-    return x, y
+    from companion_layout import place_vertical_window
+    point = place_vertical_window(size, owner, available, obstacles, preferred_side="above")
+    return point
 
 
 def create_activity_cards(original, pet, on_activate=None):
@@ -115,7 +97,9 @@ def create_activity_cards(original, pet, on_activate=None):
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication, QFrame, QLabel, QMenu, QPushButton, QWidget
 
-    class ActivityCards(QWidget):
+    from ui_motion import MotionWindowMixin
+
+    class ActivityCards(MotionWindowMixin, QWidget):
         def __init__(self):
             super().__init__(pet, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
                              | Qt.WindowType.WindowStaysOnTopHint)
@@ -320,31 +304,23 @@ def create_activity_cards(original, pet, on_activate=None):
                 return
             self._syncing = True
             try:
-                screen = self.owner.screen() or QApplication.primaryScreen()
-                if screen is None:
-                    return
-                area = screen.availableGeometry()
-                owner = (self.owner.x(), self.owner.y(), self.owner.width(), self.owner.height())
-                obstacles = []
-                for widget in (getattr(self.owner, 'toolbar', None), getattr(self.owner, 'bubble', None),
-                               getattr(getattr(self.owner, 'chat', None), 'composer', None)):
-                    if widget is not None and widget.isVisible():
-                        obstacles.append((widget.x(), widget.y(), widget.width(), widget.height()))
-                point = choose_stack_position(owner, (self.width(), self.height()),
-                                              (area.x(), area.y(), area.width(), area.height()), obstacles)
-                if (self.x(), self.y()) != point:
-                    self.move(*point)
+                from companion_layout import layout_companions
+                layout_companions(self.owner, cards=self)
             finally:
                 self._syncing = False
 
         def sync_visibility(self):
             visible = (self._active and bool(self.sessions) and self.owner.isVisible()
                        and not getattr(self.owner, 'manual_hidden', False)
-                       and not getattr(self.owner, 'fullscreen_hidden', False))
+                       and not getattr(self.owner, 'fullscreen_hidden', False)
+                       and not getattr(self.owner, '_local_hide_animation', False)
+                       and (not getattr(self.owner, 'dock_edge', None) or
+                            bool(getattr(getattr(self.owner, 'dock_controls', None), 'visible', False))))
             if visible:
                 self.sync_geometry()
-            if visible != self.isVisible():
-                self.setVisible(visible)
+                visible = getattr(self, "_space_available", True)
+            from bailong_theme import reveal_window
+            reveal_window(self, visible)
             if not visible and self._menu is not None:
                 self._menu.hide()
 

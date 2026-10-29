@@ -33,7 +33,8 @@ BRIDGE_DIRECTORY = Path(__file__).resolve().parent
 DEFAULT_ROOT = BRIDGE_DIRECTORY.parents[1]
 PROJECT_MODULES = (
     "pet", "autostart", "chat_backend", "chat_ui", "desktop_visibility",
-    "quota", "selftest", "version",
+    "quota", "selftest", "version", "movement", "video_frames",
+    "desktop_task_sync", "platform_support", "mac_autostart",
 )
 BUNDLED_PACKAGE_ROOTS = frozenset((
     "PIL", "PySide6", "shiboken6", "psutil", "defusedxml",

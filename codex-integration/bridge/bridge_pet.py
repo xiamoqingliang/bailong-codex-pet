@@ -136,18 +136,24 @@ def main():
     report_stage("original-import")
     from bridge_loader import load_original_module
     original = load_original_module()
+    from v051_behavior import V051Behavior, MetadataActivityDriver, configure_preferences
+    configure_preferences(original)
     report_stage("integration-import")
     from desktop_chat_link import install_desktop_chat_link
     install_desktop_chat_link(original)
+    from conversation_sync import install_conversation_sync
+    install_conversation_sync(original)
     from asset_source import configure_asset_source
     asset_status = configure_asset_source(original)
     from bailong_toolbar import create_toolbar
     from activity_cards import create_activity_cards
-    from activity_animation import ExternalActivityDriver
+    from dock_controls import create_dock_controls
     from activity_runtime import ActivityRuntime
     report_stage("qt-init")
     app = original.QApplication([str(Path(__file__).resolve())])
     app.setQuitOnLastWindowClosed(False)
+    from bailong_theme import configure_fonts
+    configure_fonts(app)
 
     report_stage("singleton")
     connection = original.QLocalSocket()
@@ -183,7 +189,7 @@ def main():
                 raise LoadingCancelled("codex-closed")
             starting_host = state.get("pid")
 
-    class LinkedPet(PetLifecycle, original.Pet):
+    class LinkedPet(PetLifecycle, V051Behavior, original.Pet):
         toolbar = None
         activity_driver = None
         loading = True
@@ -246,7 +252,9 @@ def main():
     toolbar = create_toolbar(original, widget)
     activity_cards = create_activity_cards(original, widget, on_activate=lambda key: activity_runtime.activate(key))
     widget.activity_cards = activity_cards
-    activity_driver = ExternalActivityDriver(original, widget,
+    widget.toolbar = toolbar
+    widget.dock_controls = create_dock_controls(widget)
+    activity_driver = MetadataActivityDriver(original, widget,
                                               is_popup_open=lambda: bool(original.QApplication.activePopupWidget()))
     widget.activity_driver = activity_driver
     activity_runtime = ActivityRuntime(original, widget, activity_cards, activity_driver)
@@ -296,6 +304,7 @@ def main():
                         widget.apply_native_hidden(True)
                 elif self.last_active is not True or show_request:
                     widget.apply_native_hidden(False)
+                widget.dock_controls.refresh()
                 toolbar.sync_visibility(active)
                 activity_runtime.poll(active, state)
                 self.last_active = active
@@ -310,11 +319,18 @@ def main():
                 signature = (active, bool(widget.manual_hidden), bool(widget.fullscreen_hidden),
                              widget.isVisible(), toolbar.isVisible(), *position,
                              len(activity_cards.sessions), activity_driver.state, activity_runtime.available,
-                             widget.bubble.isVisible(), widget.bubble_timer.isActive())
+                             widget.bubble.isVisible(), widget.bubble_timer.isActive(),
+                             bool(getattr(widget, 'notification_bubble', None) and widget.notification_bubble.isVisible()))
                 if signature != self.last_signature or time.monotonic() - self.last_report >= 5:
                     save_status({
                         "pid": os.getpid(), "phase": "running", "updatedAt": time.time(),
-                        "mode": "dedicated-toolbar", "fullSelected": active,
+                        "mode": "dedicated-toolbar", "upstreamVersion": "0.5.1", "fullSelected": active,
+                        "dockEdge": widget.dock_edge, "sizePercent": widget.size_percent,
+                        "fixedPet": widget.fixed_pet,
+                        "dockControlsVisible": widget.dock_controls.visible,
+                        "desktopSyncRunningCount": len(widget.desktop_sync.running),
+                        "desktopSyncErrorCount": widget.desktop_sync.errors,
+                        "taskActive": widget.task_active,
                         "observerFresh": state is not None,
                         "manualHidden": bool(widget.manual_hidden),
                         "fullscreenHidden": bool(widget.fullscreen_hidden),
@@ -329,6 +345,10 @@ def main():
                         "originalEngine": True, "nativeMiniGeometryModified": False,
                         "chatBusy": bool(getattr(getattr(widget, 'chat', None), 'busy', False)),
                         "chatTransport": "codex-desktop-owner-stream",
+                        "chatHistorySyncAvailable": getattr(getattr(widget.chat, "conversation_sync", None), "available", None),
+                        "chatHistorySyncError": getattr(getattr(widget.chat, "conversation_sync", None), "error_type", None),
+                        "chatHistoryVisibleConversations": sum(not chat.get("codexHidden") for chat in widget.chat.store.conversations) if widget.chat else 0,
+                        "chatHistoryTurns": sum(len(chat.get("turns", [])) for chat in widget.chat.store.conversations if not chat.get("codexHidden")) if widget.chat else 0,
                         **asset_status,
                         **activity_runtime.diagnostics(),
                         "externalActivityState": activity_driver.state,
@@ -336,9 +356,19 @@ def main():
                         "externalActivityError": activity_driver.last_error,
                         "activityCardsVisible": activity_cards.isVisible(),
                         "activityCardsWindowId": int(activity_cards.winId()),
-                        "quotaResultVisible": bool(getattr(widget.bubble, 'is_quota_result', False) and widget.bubble.isVisible()),
+                        "quotaResultVisible": bool(widget.quota_panel is not None and widget.quota_panel.isVisible()),
+                        "settingsVisible": bool(widget.settings_panel is not None and widget.settings_panel.isVisible()),
                         "originalBubbleVisible": widget.bubble.isVisible(),
                         "originalBubbleRemainingMs": widget.bubble_timer.remainingTime(),
+                        "notificationVisible": bool(getattr(widget, 'notification_bubble', None) and widget.notification_bubble.isVisible()),
+                        "notificationPosition": ([widget.notification_bubble.x(), widget.notification_bubble.y()]
+                                                 if getattr(widget, 'notification_bubble', None) else None),
+                        "windowLayerOrder": widget.window_policy().last_order,
+                        "deferredPopup": (widget.window_policy().pending[0] if widget.window_policy().pending else None),
+                        "uiMotionSpeed": 0.5,
+                        "uiMotionComplete": True,
+                        "activeUiMotions": sum(motion.active() or motion.size_animation is not None
+                                               for motion in getattr(widget, '_ui_motions', ())),
                     })
                     self.last_report = time.monotonic()
                     self.last_signature = signature

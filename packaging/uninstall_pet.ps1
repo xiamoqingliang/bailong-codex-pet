@@ -322,8 +322,21 @@ function Valid-Receipt($ReceiptValue,[string]$ExpectedEdition) {
     $recordRoot=Property $ReceiptValue 'dataRoot'
     $avatar=Property $ReceiptValue 'avatarId'
     $expectedLocal=if($ExpectedEdition -eq 'full') {'custom:bailong-full'} else {'custom:bailong'}
+    $fallbacks=Property $ReceiptValue 'localFallbacks'
+    $fallbackIds=@()
+    if($null -ne $fallbacks) {
+        if($ExpectedEdition -ne 'full' -or $fallbacks -isnot [PSCustomObject] -or @($fallbacks.PSObject.Properties).Count -gt 16) {return $false}
+        foreach($entry in $fallbacks.PSObject.Properties) {
+            if($entry.Name -cnotmatch '^bailong-full-local(?:-(?:[2-9]|1[0-6]))?$') {return $false}
+            foreach($name in @('pet.json','spritesheet.webp')) {
+                $value=Property $entry.Value $name
+                if($value -isnot [string] -or $value -cnotmatch '^[0-9a-f]{64}$') {return $false}
+            }
+            $fallbackIds+=('custom:'+$entry.Name)
+        }
+    }
     if ($recordRoot -isnot [string] -or -not [IO.Path]::IsPathRooted($recordRoot) -or
-        $avatar -isnot [string] -or ($avatar -cne $expectedLocal -and $avatar -cnotmatch '^pet_[A-Za-z0-9_-]+$')) { return $false }
+        $avatar -isnot [string] -or ($avatar -cne $expectedLocal -and $avatar -cnotmatch '^pet_[A-Za-z0-9_-]+$' -and $avatar -cnotin $fallbackIds)) { return $false }
     try { $null=Assert-LocalPath $recordRoot } catch { return $false }
     $files=Property $ReceiptValue 'files'
     foreach ($name in @('pet.json','spritesheet.webp')) {
@@ -459,11 +472,28 @@ foreach($name in @('pet.json','spritesheet.webp')) {
     }
 }
 $pairMatches=$pairMatches -or -not $anyPetFile
+$fallbackFiles=@()
+$fallbackDirectories=@()
+$fallbackLocalIds=@()
+if($receiptOwned -and $null -ne (Property $receipt 'localFallbacks')) {
+    foreach($entry in (Property $receipt 'localFallbacks').PSObject.Properties) {
+        $directory=Assert-LocalPath (Join-Path $homePath ('pets\'+$entry.Name))
+        $fallbackDirectories+=$directory
+        $fallbackLocalIds+=('custom:'+$entry.Name)
+        foreach($name in @('pet.json','spritesheet.webp')) {
+            $path=Assert-LocalPath (Join-Path $directory $name)
+            $bytes=Read-Bytes $path 33554432
+            if($null -ne $bytes -and (Hash-Bytes $bytes) -cne (Property $entry.Value $name)) {$pairMatches=$false}
+            $fallbackFiles+=[pscustomobject]@{Path=$path;Bytes=$bytes}
+        }
+    }
+}
 $registrationOwned=-not $newerInstallation -and ($receiptOwned -or ($Edition -eq 'full' -and $startupOwned) -or ($Edition -eq 'native' -and $pairMatches -and $matchedPresent -eq 2))
 $removeRegistration=$registrationOwned -and $pairMatches
 $modifiedAssets=$registrationOwned -and -not $pairMatches
 $ownedIds=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 [void]$ownedIds.Add($localId)
+foreach($id in $fallbackLocalIds) {[void]$ownedIds.Add($id)}
 if($receiptOwned) {[void]$ownedIds.Add((Property $receipt 'avatarId'))}
 try {
     $globalBytes=Read-Bytes (Join-Path $homePath '.codex-global-state.json') 33554432
@@ -472,8 +502,10 @@ try {
         $maps=Property (Property $global 'electron-persisted-atom-state') 'migrated-cloud-pet-ids-v1'
         if($null -ne $maps) {
             foreach($entry in $maps.PSObject.Properties) {
-                $value=Property $entry.Value $localId
-                if($value -is [string] -and $value -cmatch '^pet_[A-Za-z0-9_-]+$') {[void]$ownedIds.Add($value)}
+                foreach($registeredLocalId in @($localId)+$fallbackLocalIds) {
+                    $value=Property $entry.Value $registeredLocalId
+                    if($value -is [string] -and $value -cmatch '^pet_[A-Za-z0-9_-]+$') {[void]$ownedIds.Add($value)}
+                }
             }
         }
     }
@@ -556,6 +588,7 @@ if($Edition -eq 'full') {
     if($remaining.Count -gt 0) {throw '桌宠仍在结束聊天或后台任务，已关闭自启动但暂未删除注册素材；请稍后再运行卸载。'}
 }
 $removed=@()
+$removedFallbacks=@()
 $receiptRemoved=$false
 if($removeRegistration) {
     try {
@@ -563,16 +596,25 @@ if($removeRegistration) {
         foreach($name in @('pet.json','spritesheet.webp')) {
             if(-not (Same-Bytes (Read-Bytes (Join-Path $petPath $name) 33554432) $currentFiles[$name])) {throw '宠物素材在卸载期间已改变，已停止删除。'}
         }
+        foreach($entry in $fallbackFiles) {
+            if(-not (Same-Bytes (Read-Bytes $entry.Path 33554432) $entry.Bytes)) {throw '本地备用入口在卸载期间已改变，已停止删除。'}
+        }
         if($settingsChanged) {Atomic-Write $configPath $newConfig}
         foreach($name in @('pet.json','spritesheet.webp')) {
             $path=Join-Path $petPath $name
             if($null -ne $currentFiles[$name]) {[IO.File]::Delete($path);$removed+=$name}
+        }
+        foreach($entry in $fallbackFiles) {
+            if($null -ne $entry.Bytes) {[IO.File]::Delete($entry.Path);$removedFallbacks+=$entry}
         }
         if($receiptOwned) {
             if(-not (Same-Bytes (Read-Bytes $receiptPath) $receiptRaw)) {throw '安装记录在卸载期间已改变。'}
             [IO.File]::Delete($receiptPath);$receiptRemoved=$true
         }
     } catch {
+        foreach($entry in $removedFallbacks) {
+            if(-not [IO.File]::Exists($entry.Path)) {Atomic-Write $entry.Path $entry.Bytes}
+        }
         foreach($name in $removed) {
             $path=Join-Path $petPath $name
             if(-not [IO.File]::Exists($path)) {Atomic-Write $path $currentFiles[$name]}
@@ -583,11 +625,14 @@ if($removeRegistration) {
     if([IO.Directory]::Exists($petPath) -and [IO.Directory]::GetFileSystemEntries($petPath).Length -eq 0) {
         [IO.Directory]::Delete($petPath,$false)
     }
+    foreach($directory in $fallbackDirectories) {
+        if([IO.Directory]::Exists($directory) -and [IO.Directory]::GetFileSystemEntries($directory).Length -eq 0) {[IO.Directory]::Delete($directory,$false)}
+    }
 }
 $status=if($newerInstallation) {'PreservedNewerInstallation'} elseif($modifiedAssets) {'PreservedModifiedAssets'}
     elseif($null -ne $configCleanupError) {'StoppedWithPreservedConfiguration'}
     elseif($removeRegistration -or $startupRemoved -or $ownedBefore.Count) {'Uninstalled'} else {'AlreadyUninstalled'}
-[pscustomobject]@{Status=$status;Edition=$Edition;StartupRemoved=$startupRemoved;PetFilesRemoved=$removed.Count;
+[pscustomobject]@{Status=$status;Edition=$Edition;StartupRemoved=$startupRemoved;PetFilesRemoved=($removed.Count+$removedFallbacks.Count);
     SettingsChanged=$settingsChanged;ReceiptRemoved=$receiptRemoved;OwnProcessesReleased=$true;PackageFolderPreserved=$true;
     PersonalHistoryPreserved=$true;OtherInstallationPreserved=$newerInstallation;ConfigCleanupDeferred=($null -ne $configCleanupError);ConfigCleanupError=$configCleanupError} | ConvertTo-Json -Compress
 Write-Host '卸载处理完成。原解压目录已保留，可在关闭本窗口后自行删除；聊天记录和其他项目设置保持不变。'
