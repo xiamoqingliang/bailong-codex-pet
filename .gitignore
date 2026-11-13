@@ -37,9 +37,6 @@ conversations.json
 *.sqlite
 *.sqlite-*
 
-# 项目首页展示图。
-!docs/images/*.png
-
 # 本机安装归属与卸载状态。
 uninstall.request
 install-status.txt
@@ -52,14 +49,24 @@ pet-install-receipts/
 tools/alpha-cleanup/clean-assets/
 tools/alpha-cleanup/idle2-trial/
 
-# v0.5.1.1 架构文档与本机开发输出。
-!docs/diagrams/*.png
+# 本机开发输出。
 *.webm
 analysis/
 publish/
 
-# Reproducible gallery output; selected media are in docs/images.
-docs/showcase/media/
-docs/style-samples/*.png
-docs/style-samples/*.gif
-docs/style-samples/samples.json
+
+# 架构、开发和展示生成资料仅在本地保留；公开文档只用首页所需配图。
+/docs/*
+!/docs/images/
+/docs/images/*
+!/docs/images/v051-chat-history.png
+!/docs/images/v051-dock-hover.gif
+!/docs/images/v051-file-diff.png
+!/docs/images/v051-fixed-pet.gif
+!/docs/images/v051-interface-comparison.png
+!/docs/images/v051-overview.png
+!/docs/images/v051-promo.png
+!/docs/images/v051-quota.png
+!/docs/images/v051-task-notice.png
+!/docs/images/v051-tool-details.gif
+!/docs/images/v051-window-motion.gif
