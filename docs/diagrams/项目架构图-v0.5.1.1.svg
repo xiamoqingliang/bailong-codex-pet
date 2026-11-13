@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1650" viewBox="0 0 1680 1650">
+<rect width="1680" height="1650" fill="#fbf9ff"/>
+<text x="60" y="70" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="43" font-weight="600" text-anchor="start" fill="#55416b">白龙桌宠 · 项目架构</text>
+<text x="60" y="118" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#88769b">v0.5.1.1  /  原作者引擎 v0.5.1  /  Windows x64  /  按当前实现整理</text>
+<rect x="60" y="160" width="480" height="130" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="204" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">安装与交付</text>
+<text x="85" y="244" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">一键安装 / 一键卸载</text>
+<text x="85" y="278" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">注册入口 · 自启动 · 归属与回滚</text>
+<rect x="600" y="160" width="480" height="130" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="625" y="204" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">Codex Desktop</text>
+<text x="625" y="244" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">宠物选择与显隐 · 现有聊天</text>
+<text x="625" y="278" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">任务状态 · 本地会话数据库</text>
+<rect x="1140" y="160" width="480" height="130" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="1165" y="204" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">运行环境与资源</text>
+<text x="1165" y="244" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">内置 Python / PySide6 / FFmpeg</text>
+<text x="1165" y="278" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">35 段去噪 WebM · 音效</text>
+<rect x="60" y="410" width="480" height="180" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="454" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">① 状态观察器 · PowerShell</text>
+<text x="85" y="494" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">codex_observer.ps1</text>
+<text x="85" y="528" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">观察进程、选中宠物及 Mini</text>
+<text x="85" y="562" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">写入 codex-state.json</text>
+<rect x="600" y="410" width="480" height="180" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="625" y="454" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">② 监督进程 · Python</text>
+<text x="625" y="494" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">bridge_supervisor.py</text>
+<text x="625" y="528" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">单实例 · 启停判断 · 故障恢复</text>
+<text x="625" y="562" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">原生 Mini 遮罩与显隐协同</text>
+<rect x="1140" y="410" width="480" height="180" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="1165" y="454" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">③ 白龙界面进程 · Python / Qt</text>
+<text x="1165" y="494" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">bridge_pet.py</text>
+<text x="1165" y="528" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">独立桌宠窗口与附属界面</text>
+<text x="1165" y="562" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">跟随 Codex 状态与用户操作</text>
+<polyline points="300,290 300,320 740,320 740,410" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="740,410 734.345448056554,398.2941876694152 745.654551943446,398.2941876694152" fill="#a78ac1"/>
+<text x="390" y="309" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">注册 / 自启动</text>
+<polyline points="840,290 840,355 300,355 300,410" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="300,410 294.345448056554,398.2941876694152 305.654551943446,398.2941876694152" fill="#a78ac1"/>
+<text x="385" y="390" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">只读观察</text>
+<polyline points="540,500 600,500" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="600,500 588.2941876694152,505.654551943446 588.2941876694152,494.345448056554" fill="#a78ac1"/>
+<polyline points="1080,500 1140,500" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1140,500 1128.2941876694151,505.654551943446 1128.2941876694151,494.345448056554" fill="#a78ac1"/>
+<polyline points="1380,290 1380,410" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1380,410 1374.345448056554,398.2941876694152 1385.654551943446,398.2941876694152" fill="#a78ac1"/>
+<text x="1400" y="360" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">加载</text>
+<rect x="60" y="700" width="1560" height="155" rx="22" fill="#eee5f8" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="744" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">适配与渲染核心</text>
+<text x="85" y="784" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="400" text-anchor="start" fill="#55416b">bridge_loader：从原作者 EXE 加载引擎；asset_source：校验并选择动画资源</text>
+<text x="85" y="818" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="400" text-anchor="start" fill="#55416b">V051Behavior：固定桌宠 / 用户与自动移动区分 / 互动 / 额度 / 任务提醒</text>
+<polyline points="1380,590 1380,700" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1380,700 1374.345448056554,688.2941876694152 1385.654551943446,688.2941876694152" fill="#a78ac1"/>
+<polyline points="300,855 300,950" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="300,950 294.345448056554,938.2941876694152 305.654551943446,938.2941876694152" fill="#a78ac1"/>
+<polyline points="840,855 840,950" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="840,950 834.345448056554,938.2941876694152 845.654551943446,938.2941876694152" fill="#a78ac1"/>
+<polyline points="1380,855 1380,950" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1380,950 1374.345448056554,938.2941876694152 1385.654551943446,938.2941876694152" fill="#a78ac1"/>
+<rect x="60" y="950" width="480" height="220" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="994" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">聊天与历史</text>
+<text x="85" y="1034" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">desktop_chat_link / desktop_ipc</text>
+<text x="85" y="1068" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">本地 IPC → 同一 Codex 聊天</text>
+<text x="85" y="1102" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">conversation_sync → 历史同步</text>
+<text x="85" y="1136" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">file_diff → 原文件 / 新文件对比</text>
+<rect x="600" y="950" width="480" height="220" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="625" y="994" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">任务与额度</text>
+<text x="625" y="1034" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">原作者 DesktopTaskSync → 动作</text>
+<text x="625" y="1068" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">activity_source / runtime → 任务卡</text>
+<text x="625" y="1102" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">原作者 QuotaWorker → 额度查询</text>
+<text x="625" y="1136" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">本地任务状态只读采集</text>
+<rect x="1140" y="950" width="480" height="220" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="1165" y="994" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">窗口策略与动效</text>
+<text x="1165" y="1034" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">window_policy → 层级 / 互斥</text>
+<text x="1165" y="1068" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">companion_layout → 定位 / 避让</text>
+<text x="1165" y="1102" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">ui_motion → 0.5 倍速过渡</text>
+<text x="1165" y="1136" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">bailong_theme → 白紫统一样式</text>
+<polyline points="300,1170 300,1250" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="300,1250 294.345448056554,1238.2941876694151 305.654551943446,1238.2941876694151" fill="#a78ac1"/>
+<polyline points="840,1170 840,1250" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="840,1250 834.345448056554,1238.2941876694151 845.654551943446,1238.2941876694151" fill="#a78ac1"/>
+<polyline points="1380,1170 1380,1250" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1380,1250 1374.345448056554,1238.2941876694151 1385.654551943446,1238.2941876694151" fill="#a78ac1"/>
+<rect x="60" y="1250" width="1560" height="145" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="1294" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">呈现层 · PySide6 窗口</text>
+<text x="85" y="1334" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="400" text-anchor="start" fill="#55416b">白龙本体 / 控制栏 / 任务卡 / 互动消息框 / 任务消息提示</text>
+<text x="85" y="1368" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="400" text-anchor="start" fill="#55416b">额度面板 / 聊天小窗 / 独立历史窗口 / 固定尺寸设置面板</text>
+<rect x="60" y="1465" width="1560" height="130" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="1509" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">数据边界与持久化</text>
+<text x="85" y="1549" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="24" font-weight="400" text-anchor="start" fill="#55416b">偏好：QSettings  ·  布局与运行状态：本机文件  ·  安装归属：receipt 与文件哈希</text>
+<text x="85" y="1583" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="24" font-weight="400" text-anchor="start" fill="#55416b">任务轮询与历史读取不发送新消息；仅用户明确提交聊天后，交给 Codex 执行。</text>
+</svg>

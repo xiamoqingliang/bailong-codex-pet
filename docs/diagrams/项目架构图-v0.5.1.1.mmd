@@ -1,0 +1,34 @@
+flowchart TB
+    Install[一键安装：资源校验 / 注册 / 归属 / 自启动]
+    Codex[Codex Desktop]
+    Observer[状态观察器 codex_observer.ps1]
+    State[(codex-state.json)]
+    Supervisor[监督进程 bridge_supervisor.py]
+    Worker[界面进程 bridge_pet.py]
+    Engine[原作者 EXE 引擎 + 去噪 WebM + FFmpeg]
+    Behavior[适配行为 V051Behavior]
+    Chat[聊天 IPC 与历史同步]
+    Tasks[任务卡 / 原作者任务同步 / 额度]
+    Windows[窗口策略 / 布局 / 动效 / 主题]
+    UI[白龙与各类界面]
+    DB[(Codex 本地数据库)]
+
+    Install --> Supervisor
+    Supervisor -->|启停与恢复| Observer
+    Codex -->|进程与 Mini 状态| Observer
+    Observer --> State
+    State --> Supervisor
+    State --> Worker
+    Supervisor -->|按需启停| Worker
+    Worker --> Engine
+    Worker --> Behavior
+    Behavior --> Chat
+    Behavior --> Tasks
+    Behavior --> Windows
+    Chat <-->|本地 IPC：同一聊天| Codex
+    DB -->|只读历史与工具记录| Chat
+    DB -->|只读任务索引| Tasks
+    Chat --> UI
+    Tasks --> UI
+    Windows --> UI
+    Engine --> UI
