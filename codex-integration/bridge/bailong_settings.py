@@ -80,7 +80,7 @@ def create_settings(pet):
             content.setStyleSheet('background:transparent;')
             layout = QVBoxLayout(content)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(8)
+            layout.setSpacing(7)
             scroll.setWidget(content)
             chrome.addWidget(scroll, 1)
             self.scroll = scroll
