@@ -117,6 +117,51 @@ ConvertTo-Json -Compress @{passed=$true;desktopChecks=6;realProfileTouched=$fals
         self.assertTrue(result["passed"])
         self.assertFalse(result["realProfileTouched"])
 
+    def test_owner_scoped_migrations_use_only_current_owner_and_configured_slugs(self):
+        owner, other = "a" * 64, "b" * 64
+        legacy = {"migrated-cloud-pet-ids-v1": {
+            "legacy-account": {"custom:bailong-full": "pet_legacy"}}}
+        current = {"migrated-cloud-pet-ids-v1": {"current-account": {
+            "custom:bailong-full": "pet_current",
+            "custom:bailong-full-local": "pet_fallback",
+            "custom:bailong-full-local-2": "pet_unconfigured",
+            "custom:bailong": "pet_native"}}}
+        document = {
+            "electron-avatar-overlay-open": True,
+            "electron-renderer-content-owner": owner,
+            "electron-owner-atoms:" + owner: current,
+            "electron-owner-atoms:" + other: {"migrated-cloud-pet-ids-v1": {
+                "other-account": {"custom:bailong-full": "pet_other"}}},
+            "electron-persisted-atom-state": legacy,
+        }
+        cases = [{"document": document, "ids": ["pet_current", "pet_fallback"]}]
+        for value in (None, 42, "invalid", "c" * 64):
+            cases.append({"document": {**document, "electron-renderer-content-owner": value},
+                          "ids": []})
+        cases.append({"document": {**document, "electron-owner-atoms:" + owner: []}, "ids": []})
+        cases.append({"document": {**document, "electron-owner-atoms:" + owner: {}}, "ids": []})
+        cases.append({"document": {"electron-avatar-overlay-open": True,
+                                    "electron-persisted-atom-state": legacy}, "ids": ["pet_legacy"]})
+        (self.root / "cases.json").write_text(json.dumps(cases), encoding="utf-8")
+        result = self.run_fixture(r"""
+$globalStatePath=Join-Path $fixture 'global.json'
+$bridgeConfig=Join-Path $fixture 'bridge.json'
+[IO.File]::WriteAllText($bridgeConfig,'{"fullAvatarIds":["custom:bailong-full","custom:bailong-full-local"]}')
+$globalStateReadAt=[DateTime]::MinValue; $globalStateVerifiedAt=[DateTime]::MinValue
+$cases=[IO.File]::ReadAllText((Join-Path $fixture 'cases.json')) | ConvertFrom-Json
+foreach ($case in $cases) {
+    [IO.File]::WriteAllText($globalStatePath,($case.document | ConvertTo-Json -Depth 12 -Compress))
+    $globalStateStamp=$null
+    Read-GlobalPetIntent -BridgeConfigPath $bridgeConfig
+    Require ($requestedOpen -eq $true) 'Owner projection changed native visibility intent'
+    Require ((@($fullBailongMigratedIds) -join ',') -ceq (@($case.ids) -join ',')) 'Owner projection accepted stale or unrelated migration'
+}
+ConvertTo-Json -Compress @{passed=$true;cases=$cases.Count;realProfileTouched=$false}
+""")
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["cases"], len(cases))
+        self.assertFalse(result["realProfileTouched"])
+
     def test_no_valid_snapshot_cannot_be_created_from_missing_files(self):
         result = self.run_fixture(r"""
 $globalStatePath=Join-Path $fixture 'absent-global.json'

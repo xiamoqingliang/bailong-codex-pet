@@ -1,0 +1,37 @@
+flowchart TB
+    Install[一键安装：资源校验 / 注册 / 归属 / 自启动]
+    Codex[Codex Desktop：宠物选择 / 智能伙伴 / 现有聊天]
+    Owner[当前 renderer owner 的宠物迁移映射]
+    Observer[状态观察器：进程 / 宠物 ID / 智能伙伴标签]
+    State[(codex-state.json)]
+    Supervisor[监督进程：单实例 / 启停 / Mini 遮罩]
+    Worker[白龙界面进程：原作者引擎 + Python / Qt]
+    Guard[退出看门狗 15 秒 / 监督回收当前子进程 20 秒]
+    Behavior[V051Behavior：固定桌宠 / 独显偏好 / 互动]
+    Chat[本地 IPC：同一聊天 / 历史 / 文件对比]
+    Tasks[任务卡 / 原作者任务动作 / 额度]
+    Gate[窗口 role gate / 布局 / 动效 / 主题]
+    Manual[右键与托盘：用户主动打开聊天 / 历史 / 额度 / 设置]
+    UI[白龙本体与按策略允许的附属界面]
+    DB[(Codex 本地数据库)]
+
+    Install --> Supervisor
+    Codex --> Owner --> Observer
+    Codex -->|进程与 Mini 状态| Observer
+    Supervisor -->|启动与恢复| Observer
+    Observer --> State
+    State --> Supervisor
+    State --> Worker
+    Supervisor -->|按需启动 / 保留宿主代际| Worker
+    Worker --> Guard -->|有界退出 / 等待新宿主| Supervisor
+    Worker --> Behavior
+    Behavior --> Chat
+    Behavior --> Tasks
+    Behavior --> Gate
+    Manual -->|明确手动 role 授权| Gate
+    Chat <-->|用户提交交由现有聊天执行| Codex
+    DB -->|只读历史与工具记录| Chat
+    DB -->|只读任务索引| Tasks
+    Chat --> Gate
+    Tasks --> Gate
+    Gate --> UI

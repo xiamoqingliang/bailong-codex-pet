@@ -849,6 +849,9 @@ def make_controller_class(original_class, *, home=None, background=True, reader_
                     sync.request_tool_detail(token, key)
 
         def open_history(self, chat_id=None):
+            policy = getattr(self.pet, 'window_policy', None)
+            if policy is not None:
+                policy().user_open('history')
             self._history_anchor = None
             self._history_follow_latest = True
             self._history_horizontal_position = 0

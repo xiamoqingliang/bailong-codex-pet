@@ -311,6 +311,8 @@ def create_activity_cards(original, pet, on_activate=None):
 
         def sync_visibility(self):
             visible = (self._active and bool(self.sessions) and self.owner.isVisible()
+                       and getattr(self.owner, 'exit_reason', None) is None
+                       and not getattr(self.owner, 'pet_only', False)
                        and not getattr(self.owner, 'manual_hidden', False)
                        and not getattr(self.owner, 'fullscreen_hidden', False)
                        and not getattr(self.owner, '_local_hide_animation', False)
@@ -321,7 +323,7 @@ def create_activity_cards(original, pet, on_activate=None):
                 visible = getattr(self, "_space_available", True)
             from bailong_theme import reveal_window
             reveal_window(self, visible)
-            if not visible and self._menu is not None:
+            if not visible and self._menu is not None and not getattr(self.owner, 'pet_only', False):
                 self._menu.hide()
 
         def set_active(self, active):
@@ -341,4 +343,8 @@ def create_activity_cards(original, pet, on_activate=None):
             event.ignore()
             self.set_active(False)
 
-    return ActivityCards()
+    cards = ActivityCards()
+    policy = getattr(pet, 'window_policy', None)
+    if policy is not None:
+        policy().watch(cards, 'cards')
+    return cards

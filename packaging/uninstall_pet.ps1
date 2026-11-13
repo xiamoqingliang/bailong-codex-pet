@@ -499,12 +499,29 @@ try {
     $globalBytes=Read-Bytes (Join-Path $homePath '.codex-global-state.json') 33554432
     if($null -ne $globalBytes) {
         $global=$utf8.GetString($globalBytes).TrimStart([char]0xFEFF) | ConvertFrom-Json
-        $maps=Property (Property $global 'electron-persisted-atom-state') 'migrated-cloud-pet-ids-v1'
-        if($null -ne $maps) {
-            foreach($entry in $maps.PSObject.Properties) {
-                foreach($registeredLocalId in @($localId)+$fallbackLocalIds) {
-                    $value=Property $entry.Value $registeredLocalId
-                    if($value -is [string] -and $value -cmatch '^pet_[A-Za-z0-9_-]+$') {[void]$ownedIds.Add($value)}
+        # New Codex versions scope pet IDs to the active renderer owner.
+        # An invalid/missing active scope must not fall back to another owner.
+        if($global -is [PSCustomObject]) {
+            $containers=@()
+            $ownerProperty=$global.PSObject.Properties['electron-renderer-content-owner']
+            if($null -ne $ownerProperty) {
+                $owner=$ownerProperty.Value
+                if($owner -is [string] -and $owner -cmatch '^[0-9a-f]{64}$') {
+                    $containers=@(Property $global ('electron-owner-atoms:'+$owner))
+                }
+            } else {
+                $containers=@(Property $global 'electron-persisted-atom-state')
+            }
+            foreach($container in $containers) {
+                if($container -isnot [PSCustomObject]) {continue}
+                $maps=Property $container 'migrated-cloud-pet-ids-v1'
+                if($maps -isnot [PSCustomObject]) {continue}
+                foreach($entry in $maps.PSObject.Properties) {
+                    if($entry.Value -isnot [PSCustomObject]) {continue}
+                    foreach($registeredLocalId in @($localId)+$fallbackLocalIds) {
+                        $value=Property $entry.Value $registeredLocalId
+                        if($value -is [string] -and $value -cmatch '^pet_[A-Za-z0-9_-]+$') {[void]$ownedIds.Add($value)}
+                    }
                 }
             }
         }
@@ -570,7 +587,8 @@ if($Edition -eq 'full') {
     if([IO.Directory]::Exists($bridgePath)) {
         foreach($name in @('supervisor.stop','pet.stop','observer.stop')) {Atomic-Write (Join-Path $bridgePath $name) $utf8.GetBytes('uninstall requested')}
     }
-    $deadline=[DateTime]::UtcNow.AddSeconds(15)
+    # Allow the supervisor's 20-second worker cleanup plus process exit time.
+    $deadline=[DateTime]::UtcNow.AddSeconds(25)
     do {
         $remaining=@(Owned-Processes)
         if($remaining.Count -eq 0) {break}

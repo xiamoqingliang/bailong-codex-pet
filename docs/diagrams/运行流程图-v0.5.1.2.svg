@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2640" viewBox="0 0 1600 2640">
+<rect width="1600" height="2640" fill="#fbf9ff"/>
+<text x="60" y="70" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="43" font-weight="600" text-anchor="start" fill="#55416b">白龙桌宠 · 运行与交付流程</text>
+<text x="60" y="118" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#88769b">v0.5.1.2  /  安装 → 身份与显隐 → 交互循环 → 有界退出 → 卸载</text>
+<rect x="500" y="155" width="600" height="90" rx="22" fill="#eee5f8" stroke="#cbb9df" stroke-width="2"/>
+<text x="525" y="199" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">完整解压安装包，运行一键安装</text>
+<polyline points="800,245 800,300" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,300 794.345448056554,288.2941876694152 805.654551943446,288.2941876694152" fill="#a78ac1"/>
+<rect x="500" y="300" width="600" height="150" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="525" y="344" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">校验并注册白龙</text>
+<text x="525" y="384" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">检查资源 / 备份相关配置 / 写入归属</text>
+<text x="525" y="418" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">精确宠物入口与自启动；旧版安全接管</text>
+<polyline points="800,450 800,505" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,505 794.345448056554,493.2941876694152 805.654551943446,493.2941876694152" fill="#a78ac1"/>
+<rect x="500" y="505" width="600" height="145" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="525" y="549" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">监督进程 + 状态观察器</text>
+<text x="525" y="589" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">读取当前 owner 的精确宠物迁移 ID</text>
+<text x="525" y="623" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">观察宿主与 Mini，识别“智能伙伴”标签</text>
+<polyline points="800,650 800,710" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,710 794.345448056554,698.2941876694152 805.654551943446,698.2941876694152" fill="#a78ac1"/>
+<polygon points="800,710.0 1080.0,800 800,890.0 520.0,800" fill="#eee5f8" stroke="#a78ac1" stroke-width="2"/>
+<text x="800" y="790" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="600" text-anchor="middle" fill="#55416b">Codex 正在运行，且</text>
+<text x="800" y="826" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="600" text-anchor="middle" fill="#55416b">选中白龙并允许显示？</text>
+<polyline points="1080,800 1220,800" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1220,800 1208.2941876694151,805.654551943446 1208.2941876694151,794.345448056554" fill="#a78ac1"/>
+<text x="1120" y="782" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">否</text>
+<rect x="1220" y="730" width="310" height="130" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="1245" y="774" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">等待 / 收起</text>
+<text x="1245" y="814" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="21" font-weight="400" text-anchor="start" fill="#55416b">原宿主退出时关闭界面</text>
+<polyline points="1375,730 1375,580 1100,580" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1100,580 1111.7058123305849,574.345448056554 1111.7058123305849,585.654551943446" fill="#a78ac1"/>
+<polyline points="800,890 800,970" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,970 794.345448056554,958.2941876694152 805.654551943446,958.2941876694152" fill="#a78ac1"/>
+<text x="820" y="932" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">是</text>
+<rect x="500" y="970" width="600" height="150" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="525" y="1014" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">按需启动白龙界面</text>
+<text x="525" y="1054" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">加载原作者引擎与 35 段动画</text>
+<text x="525" y="1088" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">读取偏好，创建控件并同步显隐</text>
+<polyline points="800,1120 800,1190 280,1190 280,1260" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="280,1260 274.345448056554,1248.2941876694151 285.654551943446,1248.2941876694151" fill="#a78ac1"/>
+<polyline points="800,1120 800,1260" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,1260 794.345448056554,1248.2941876694151 805.654551943446,1248.2941876694151" fill="#a78ac1"/>
+<text x="825" y="1172" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">并行处理</text>
+<polyline points="800,1120 800,1190 1320,1190 1320,1260" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1320,1260 1314.345448056554,1248.2941876694151 1325.654551943446,1248.2941876694151" fill="#a78ac1"/>
+<rect x="60" y="1260" width="440" height="220" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="85" y="1304" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">任务变化</text>
+<text x="85" y="1344" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">只读本地任务状态</text>
+<text x="85" y="1378" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">更新任务卡与原作者任务动作</text>
+<text x="85" y="1412" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">自动提示服从独显显示许可</text>
+<rect x="580" y="1260" width="440" height="220" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="605" y="1304" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">用户交互</text>
+<text x="605" y="1344" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">右键 / 托盘始终可用</text>
+<text x="605" y="1378" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">主动打开聊天 / 历史 / 额度</text>
+<text x="605" y="1412" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">聊天交给同一 Codex 会话执行</text>
+<rect x="1100" y="1260" width="440" height="220" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="1125" y="1304" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">设置与移动</text>
+<text x="1125" y="1344" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">保存大小、固定、独显等偏好</text>
+<text x="1125" y="1378" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">设置入口始终可用</text>
+<text x="1125" y="1412" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="23" font-weight="400" text-anchor="start" fill="#55416b">独显不更改移动或音效偏好</text>
+<polyline points="280,1480 280,1520 800,1520 800,1550" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,1550 794.345448056554,1538.2941876694151 805.654551943446,1538.2941876694151" fill="#a78ac1"/>
+<polyline points="800,1480 800,1520 800,1520 800,1550" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,1550 794.345448056554,1538.2941876694151 805.654551943446,1538.2941876694151" fill="#a78ac1"/>
+<polyline points="1320,1480 1320,1520 800,1520 800,1550" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,1550 794.345448056554,1538.2941876694151 805.654551943446,1538.2941876694151" fill="#a78ac1"/>
+<rect x="100" y="1550" width="1400" height="180" rx="22" fill="#eee5f8" stroke="#cbb9df" stroke-width="2"/>
+<text x="125" y="1594" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">统一处理窗口显示许可、层级、定位与动画</text>
+<text x="125" y="1634" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">正常模式：沿用显隐、互斥、避让与半速过渡；独显模式：默认只保留本体</text>
+<text x="125" y="1668" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">常驻控制栏 / 任务卡 / 自动提示保持隐藏，明确手动打开的聊天、历史、额度和设置可显示</text>
+<text x="125" y="1702" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#55416b">切换模式清除临时许可与待显示提示；定时刷新、悬停和迟到 Show 均经过检查</text>
+<polyline points="800,1730 800,1760" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,1760 794.345448056554,1748.2941876694151 805.654551943446,1748.2941876694151" fill="#a78ac1"/>
+<polygon points="800,1760.0 1080.0,1850 800,1940.0 520.0,1850" fill="#eee5f8" stroke="#a78ac1" stroke-width="2"/>
+<text x="800" y="1840" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="600" text-anchor="middle" fill="#55416b">原宿主关闭或换代，</text>
+<text x="800" y="1876" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="600" text-anchor="middle" fill="#55416b">或白龙已请求退出？</text>
+<polyline points="1080,1850 1220,1850" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1220,1850 1208.2941876694151,1855.654551943446 1208.2941876694151,1844.345448056554" fill="#a78ac1"/>
+<text x="1120" y="1832" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">是</text>
+<rect x="1220" y="1750" width="320" height="240" rx="22" fill="#f1ebf8" stroke="#cbb9df" stroke-width="2"/>
+<text x="1245" y="1794" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">有界退出与回收</text>
+<text x="1245" y="1834" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#55416b">界面看门狗：15 秒</text>
+<text x="1245" y="1868" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#55416b">监督回收期限：20 秒</text>
+<text x="1245" y="1902" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#55416b">仅持有的白龙子进程</text>
+<text x="1245" y="1936" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#55416b">保留退出原因与宿主代际</text>
+<polyline points="1380,1990 1570,1990 1570,580 1375,580" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1375,580 1386.7058123305849,574.345448056554 1386.7058123305849,585.654551943446" fill="#a78ac1"/>
+<polyline points="800,1940 800,2050" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,2050 794.345448056554,2038.2941876694151 805.654551943446,2038.2941876694151" fill="#a78ac1"/>
+<text x="820" y="1993" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">否</text>
+<polygon points="800,2050.0 1040.0,2130 800,2210.0 560.0,2130" fill="#eee5f8" stroke="#a78ac1" stroke-width="2"/>
+<text x="800" y="2138" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="600" text-anchor="middle" fill="#55416b">用户发起卸载？</text>
+<polyline points="560,2130 30,2130 30,580 500,580" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="500,580 488.2941876694152,585.654551943446 488.2941876694152,574.345448056554" fill="#a78ac1"/>
+<text x="75" y="2100" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">否：继续观察与交互</text>
+<polyline points="800,2210 800,2300" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,2300 794.345448056554,2288.2941876694154 805.654551943446,2288.2941876694154" fill="#a78ac1"/>
+<text x="820" y="2254" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="22" font-weight="400" text-anchor="start" fill="#88769b">是</text>
+<rect x="400" y="2300" width="800" height="145" rx="22" fill="#ffffff" stroke="#cbb9df" stroke-width="2"/>
+<text x="425" y="2344" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">运行一键卸载白龙</text>
+<text x="425" y="2384" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="400" text-anchor="start" fill="#55416b">核对归属 / 停止自己的助手 / 还原相关选择 / 清理自启动</text>
+<text x="425" y="2418" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="25" font-weight="400" text-anchor="start" fill="#55416b">保留聊天记录、其他桌宠及用户后续设置</text>
+<polyline points="800,2445 800,2510" fill="none" stroke="#a78ac1" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="800,2510 794.345448056554,2498.2941876694154 805.654551943446,2498.2941876694154" fill="#a78ac1"/>
+<rect x="500" y="2510" width="600" height="80" rx="22" fill="#eee5f8" stroke="#cbb9df" stroke-width="2"/>
+<text x="525" y="2554" font-family="Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-size="28" font-weight="600" text-anchor="start" fill="#55416b">卸载完成，可移走解压目录</text>
+</svg>

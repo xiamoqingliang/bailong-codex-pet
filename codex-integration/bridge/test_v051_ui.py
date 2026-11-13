@@ -380,6 +380,7 @@ class V051EngineTests(unittest.TestCase):
             self.assertEqual(swap.duration(), 800)
             swap.setCurrentTime(200)
             for x in (1100, 950, 850, 750, 700, 600):
+                elapsed = swap.currentTime()
                 pet.move(area.left()+x, pet.y())
                 self.app.processEvents()
                 self.assertEqual(panel._placement_side, 'left')
@@ -387,7 +388,9 @@ class V051EngineTests(unittest.TestCase):
                 self.assertLessEqual(rect[0]+rect[2]+12, pet.x())
                 self.assertTrue(area.contains(QRect(*rect)))
                 self.assertIs(panel._ui_motion.animation, swap)
-                self.assertEqual(swap.currentTime(), 200)
+                # Processing Qt events may advance time; retargeting must
+                # preserve the same animation without rewinding its progress.
+                self.assertGreaterEqual(swap.currentTime(), elapsed)
             panel._ui_motion.finish()
 
     def test_live_toolbar_and_task_card_flip_sides_during_pet_drag_with_motion(self):
@@ -511,6 +514,19 @@ class V051EngineTests(unittest.TestCase):
                 self.assertEqual(rect[0]+rect[2]+8, pet.x())
                 self.assertTrue(area.contains(QRect(*rect)))
                 self.assertEqual(panel._ui_motion.expiry_at, deadline)
+
+    def test_opening_history_keeps_existing_settings_visible(self):
+        pet = self.pet
+        self.assertFalse(pet.pet_only)
+        area = self.use_wide_settings_screen()
+        pet.move(area.left() + 200, area.top() + 200)
+        with self.styled_chat() as controller:
+            pet.show_settings()
+            self.assertTrue(pet.settings_panel.isVisible())
+            controller.open_history()
+            self.app.processEvents()
+            self.assertTrue(controller.window.isVisible())
+            self.assertTrue(pet.settings_panel.isVisible())
 
     def test_settings_toggle_closes_popups_but_keeps_independent_speech_and_history(self):
         pet = self.pet

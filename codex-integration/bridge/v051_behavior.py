@@ -169,6 +169,7 @@ class MetadataActivityDriver:
 class V051Behavior:
     _ui_motion_enabled = True
     fixed_pet = False
+    pet_only = False
     settings_panel = None
     quota_panel = None
     dock_controls = None
@@ -179,6 +180,23 @@ class V051Behavior:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fixed_pet = self.settings.value('fixedPet', False, type=bool)
+        self.pet_only = self.settings.value('petOnly', False, type=bool)
+        if self.pet_only:
+            self.window_policy().set_pet_only(True)
+
+    def setup_tray(self):
+        # Upstream builds the first context menu during its constructor.
+        self.pet_only = self.settings.value('petOnly', False, type=bool)
+        return super().setup_tray()
+
+    def set_pet_only(self, enabled):
+        self.pet_only = bool(enabled)
+        self.settings.setValue('petOnly', self.pet_only)
+        self.settings.sync()
+        self.window_policy().set_pet_only(self.pet_only)
+        if self.settings_panel is not None:
+            self.settings_panel.refresh()
+        self.note_interaction()
 
     def set_fixed_pet(self, enabled):
         self.fixed_pet = bool(enabled)
@@ -402,7 +420,14 @@ class V051Behavior:
         actions = self.actions_menu()
         actions.setTitle('动作')
         menu.addMenu(actions)
-        menu.addAction('设置', self.show_settings)
+        settings = menu.addAction('设置', self.show_settings)
+        settings.setObjectName('BailongSettingsAction')
+        only = menu.addAction('独显桌宠')
+        only.setObjectName('BailongPetOnly')
+        only.setCheckable(True)
+        only.setChecked(self.pet_only)
+        only.setToolTip('隐藏常驻控制栏、任务卡和自动提示；保留右键菜单。')
+        only.toggled.connect(self.set_pet_only)
         menu.addSeparator()
         menu.addAction('退出桌宠', self.close)
         return menu

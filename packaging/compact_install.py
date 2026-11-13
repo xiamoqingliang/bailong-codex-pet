@@ -26,6 +26,7 @@ FALLBACK_SLUG = "bailong-full-local"
 FALLBACK_SLUG_RE = re.compile(r"bailong-full-local(?:-(?:[2-9]|1[0-6]))?\Z")
 MUTEX = r"Local\BailongCodexBridgeSupervisorV1"
 CLOUD_ID = re.compile(r"pet_[A-Za-z0-9_-]+\Z")
+CONTENT_OWNER = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONFIG = 1024 * 1024
 DESKTOP_KEYS = ("selected-avatar-id", "avatar-overlay-pet-visible")
 UNINSTALL_MARKER = "uninstall.request"
@@ -139,6 +140,24 @@ def sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def pet_migration_maps(document: object) -> list[dict]:
+    """Read the active owner's pet mappings; older state has no owner field."""
+    if not isinstance(document, dict):
+        return []
+    if "electron-renderer-content-owner" in document:
+        owner = document["electron-renderer-content-owner"]
+        if not isinstance(owner, str) or not CONTENT_OWNER.fullmatch(owner):
+            return []
+        container = document.get("electron-owner-atoms:" + owner)
+    else:
+        container = document.get("electron-persisted-atom-state")
+    if not isinstance(container, dict):
+        return []
+    mappings = container.get("migrated-cloud-pet-ids-v1")
+    return ([mapping for mapping in mappings.values() if isinstance(mapping, dict)]
+            if isinstance(mappings, dict) else [])
+
+
 def choose_avatar(config: dict, global_bytes: bytes | None) -> str:
     """Only preserve an already-selected full-pet ID; never guess an account."""
     selected = config.get("desktop", {}).get("selected-avatar-id")
@@ -146,11 +165,7 @@ def choose_avatar(config: dict, global_bytes: bytes | None) -> str:
         return LOCAL_ID
     try:
         document = json.loads(global_bytes.decode("utf-8-sig")) if global_bytes else {}
-        maps = document.get("electron-persisted-atom-state", {}).get("migrated-cloud-pet-ids-v1", {})
-        if isinstance(maps, dict) and any(
-            isinstance(mapping, dict) and mapping.get(LOCAL_ID) == selected
-            for mapping in maps.values()
-        ):
+        if any(mapping.get(LOCAL_ID) == selected for mapping in pet_migration_maps(document)):
             return selected
     except (ValueError, AttributeError, UnicodeError):
         pass
@@ -175,12 +190,10 @@ def local_fallback_plan(root, home, parsed, global_bytes, old_receipt, manifest,
     migrated = set()
     try:
         document = json.loads(global_bytes.decode('utf-8-sig')) if global_bytes else {}
-        maps = document.get('electron-persisted-atom-state', {}).get('migrated-cloud-pet-ids-v1', {})
-        for mapping in maps.values() if isinstance(maps, dict) else ():
-            if isinstance(mapping, dict):
-                migrated.update(key for key, value in mapping.items()
-                                if isinstance(key, str) and (key == LOCAL_ID or FALLBACK_SLUG_RE.fullmatch(key.removeprefix('custom:')))
-                                and isinstance(value, str) and CLOUD_ID.fullmatch(value))
+        for mapping in pet_migration_maps(document):
+            migrated.update(key for key, value in mapping.items()
+                            if isinstance(key, str) and (key == LOCAL_ID or FALLBACK_SLUG_RE.fullmatch(key.removeprefix('custom:')))
+                            and isinstance(value, str) and CLOUD_ID.fullmatch(value))
     except (ValueError, UnicodeError, AttributeError, TypeError):
         pass
     if LOCAL_ID not in migrated and not records:

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from package_commands import uninstall_command
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.5.1.1'
+VERSION = '0.5.1.2'
 NAME = 'Bailong-Codex-v051'
 BRIDGE_FILES = '''bridge_loader.py bridge_pet.py pet_lifecycle.py bridge_policy.py
 bridge_supervisor.py bailong_toolbar.py bailong_theme.py bailong_settings.py

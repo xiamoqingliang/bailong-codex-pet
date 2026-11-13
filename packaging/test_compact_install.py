@@ -409,6 +409,56 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(setup.LOCAL_ID, setup.choose_avatar({}, raw))
         self.assertEqual(setup.LOCAL_ID, setup.choose_avatar({"desktop": {"selected-avatar-id": "pet_unknown"}}, raw))
 
+    def test_owner_scoped_migration_only_reuses_exact_full_pet(self):
+        state = {"electron-renderer-content-owner": "a" * 64,
+                 "electron-owner-atoms:" + "a" * 64: {"migrated-cloud-pet-ids-v1": {
+            "fixture-account": {setup.LOCAL_ID: "pet_full", "custom:other": "pet_other"}}}}
+        raw = json.dumps(state).encode()
+        for selected, expected in (("pet_full", "pet_full"), ("pet_other", setup.LOCAL_ID),
+                                   ("pet_unknown", setup.LOCAL_ID)):
+            with self.subTest(selected=selected):
+                self.assertEqual(expected, setup.choose_avatar(
+                    {"desktop": {"selected-avatar-id": selected}}, raw))
+
+    def test_migration_projection_uses_only_active_owner(self):
+        state = {
+            "electron-renderer-content-owner": "a" * 64,
+            "electron-persisted-atom-state": {"migrated-cloud-pet-ids-v1": {
+                "legacy-account": {setup.LOCAL_ID: "pet_legacy"}}},
+            "electron-owner-atoms:" + "a" * 64: {"migrated-cloud-pet-ids-v1": {
+                "owner-account": {setup.LOCAL_ID: "pet_owner"}, "invalid-account": []}},
+            "electron-owner-atoms:" + "b" * 64: {"migrated-cloud-pet-ids-v1": {
+                "other-owner-account": {setup.LOCAL_ID: "pet_other_owner"}}},
+            "electron-owner-atoms:invalid": {"migrated-cloud-pet-ids-v1": {
+                "unknown-owner": {setup.LOCAL_ID: "pet_wrong_owner"}}},
+            "unrelated": {"migrated-cloud-pet-ids-v1": {
+                "nested-account": {setup.LOCAL_ID: "pet_unrelated"}}},
+        }
+        raw = json.dumps(state).encode()
+        for selected, expected in (("pet_legacy", setup.LOCAL_ID), ("pet_owner", "pet_owner"),
+                                   ("pet_other_owner", setup.LOCAL_ID),
+                                   ("pet_wrong_owner", setup.LOCAL_ID),
+                                   ("pet_unrelated", setup.LOCAL_ID)):
+            with self.subTest(selected=selected):
+                self.assertEqual(expected, setup.choose_avatar(
+                    {"desktop": {"selected-avatar-id": selected}}, raw))
+        self.assertEqual([], setup.pet_migration_maps([]))
+
+    def test_invalid_active_owner_never_falls_back_to_legacy_or_other_owner(self):
+        legacy = {"migrated-cloud-pet-ids-v1": {"fixture-account": {setup.LOCAL_ID: "pet_legacy"}}}
+        for owner, container in ((None, legacy), ("invalid", legacy), ("A" * 64, legacy),
+                                 ([], legacy), ("a" * 64, None), ("a" * 64, []),
+                                 ("a" * 64, {"migrated-cloud-pet-ids-v1": []})):
+            with self.subTest(owner=owner, container=container):
+                state = {"electron-renderer-content-owner": owner,
+                         "electron-persisted-atom-state": legacy,
+                         "electron-owner-atoms:" + "b" * 64: legacy}
+                if isinstance(owner, str) and container is not None:
+                    state["electron-owner-atoms:" + owner] = container
+                self.assertEqual([], setup.pet_migration_maps(state))
+                self.assertEqual(setup.LOCAL_ID, setup.choose_avatar(
+                    {"desktop": {"selected-avatar-id": "pet_legacy"}}, json.dumps(state).encode()))
+
     def test_malformed_map_does_not_break_install(self):
         self.config(b'[desktop]\nselected-avatar-id = "pet_unknown"\n')
         (self.home / ".codex-global-state.json").write_bytes(b"not json")
@@ -446,6 +496,38 @@ class InstallerTests(unittest.TestCase):
         config = tomllib.loads((self.home / 'config.toml').read_text())
         self.assertEqual(config['desktop']['selected-avatar-id'], 'custom:bailong-full-local-2')
         self.assertEqual(state.read_bytes(), original)
+
+    def test_owner_scoped_mapped_fallback_rotates_without_changing_global_state(self):
+        self.home.mkdir(parents=True, exist_ok=True)
+        raw = json.dumps({"electron-renderer-content-owner": "a" * 64,
+                          "electron-owner-atoms:" + "a" * 64: {
+            "migrated-cloud-pet-ids-v1": {"fixture-account": {
+                setup.LOCAL_ID: "pet_old_full", "custom:bailong-full-local": "pet_new_full"}}}}).encode()
+        state = self.home / ".codex-global-state.json"
+        state.write_bytes(raw)
+        self.install()
+        config = tomllib.loads((self.home / "config.toml").read_text())
+        self.assertEqual(config["desktop"]["selected-avatar-id"], "custom:bailong-full-local-2")
+        bridge = json.loads((self.root / "codex-integration/bridge/bridge-config.json").read_text())
+        self.assertEqual(bridge["fullAvatarIds"], [setup.LOCAL_ID, "custom:bailong-full-local-2"])
+        self.assertEqual(self.install()["filesChanged"], 0)
+        self.assertEqual(state.read_bytes(), raw)
+
+    def test_fallback_rotation_ignores_inactive_owner_and_legacy_migrations(self):
+        state, _ = self.migrated_state({"custom:bailong-full-local": "pet_first"})
+        document = json.loads(state.read_bytes())
+        document["electron-renderer-content-owner"] = "a" * 64
+        document["electron-owner-atoms:" + "a" * 64] = {"migrated-cloud-pet-ids-v1": {
+            "fixture-account": {setup.LOCAL_ID: "pet_active_full",
+                                "custom:bailong-full-local-2": "pet_second"}}}
+        document["electron-owner-atoms:" + "b" * 64] = {"migrated-cloud-pet-ids-v1": {
+            "other-account": {"custom:bailong-full-local": "pet_other"}}}
+        raw = json.dumps(document).encode()
+        state.write_bytes(raw)
+        self.install()
+        config = tomllib.loads((self.home / "config.toml").read_text())
+        self.assertEqual(config["desktop"]["selected-avatar-id"], "custom:bailong-full-local")
+        self.assertEqual(state.read_bytes(), raw)
 
     def test_unowned_or_modified_fallback_is_preserved(self):
         self.migrated_state()

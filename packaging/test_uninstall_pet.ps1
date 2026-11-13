@@ -113,6 +113,60 @@ try {
     Require ($result.SettingsChanged -and (Hash $globalPath) -eq $globalBefore) 'Cloud selection mapping was not handled read-only'
     $passed.Add('late-cloud-migration-supported')
 
+    $ownerA='a'*64
+    $ownerB='b'*64
+    $case=New-Case 'owner-cloud-fallback' 'full'
+    $fallback=Join-Path $case.Home 'pets\bailong-full-local'
+    [IO.Directory]::CreateDirectory($fallback)|Out-Null
+    foreach($name in @('pet.json','spritesheet.webp')) {Copy-Item -LiteralPath (Join-Path $case.Pet $name) -Destination (Join-Path $fallback $name)}
+    $case.Receipt.avatarId='custom:bailong-full-local'
+    $case.Receipt.desktopInstalled['selected-avatar-id']='custom:bailong-full-local'
+    $case.Receipt.localFallbacks=@{'bailong-full-local'=@{'pet.json'=(Hash (Join-Path $fallback 'pet.json'));'spritesheet.webp'=(Hash (Join-Path $fallback 'spritesheet.webp'))}}
+    Put $case.ReceiptPath ($case.Receipt|ConvertTo-Json -Depth 8)
+    Put $case.Config $case.Before.Replace("'custom:bailong-full'","'pet_fixture_fallback'")
+    $ownerState=@{
+        'electron-renderer-content-owner'=$ownerA;
+        'electron-persisted-atom-state'=@{'migrated-cloud-pet-ids-v1'=@{'legacy-account'=@{'custom:bailong-full'='pet_legacy'}}};
+        ('electron-owner-atoms:'+$ownerA)=@{'migrated-cloud-pet-ids-v1'=@{'active-account'=@{'custom:bailong-full-local'='pet_fixture_fallback';'custom:other'='pet_unrelated'}}};
+        ('electron-owner-atoms:'+$ownerB)=@{'migrated-cloud-pet-ids-v1'=@{'other-account'=@{'custom:bailong-full'='pet_other_owner'}}}
+    }
+    $globalPath=Join-Path $case.Home '.codex-global-state.json'
+    Put $globalPath ($ownerState|ConvertTo-Json -Depth 8)
+    $globalBefore=Hash $globalPath
+    $result=Run-Uninstall $case
+    $actual=[IO.File]::ReadAllText($case.Config)
+    Require ($result.SettingsChanged -and $result.PetFilesRemoved -eq 4 -and $actual.Contains('selected-avatar-id = "custom:fox"')) 'Active owner fallback migration was not uninstalled'
+    Require ((Hash $globalPath) -eq $globalBefore) 'Owner migration data changed during uninstall'
+    $passed.Add('active-owner-fallback-migration-supported-read-only')
+
+    foreach($selection in @('pet_legacy','pet_other_owner','pet_unrelated')) {
+        $case=New-Case ('owner-unrelated-'+$selection) 'full'
+        Put $case.Config $case.Before.Replace("'custom:bailong-full'",("'"+$selection+"'"))
+        Put (Join-Path $case.Home '.codex-global-state.json') ($ownerState|ConvertTo-Json -Depth 8)
+        $before=Hash $case.Config
+        $result=Run-Uninstall $case
+        Require (-not $result.SettingsChanged -and (Hash $case.Config) -eq $before) 'Uninstall recognized a legacy, inactive-owner or unrelated pet in active owner mode'
+    }
+    $passed.Add('active-owner-rejects-other-owner-legacy-and-unrelated-pets')
+
+    foreach($invalidScope in @('missing','invalid-owner','null-owner','invalid-map')) {
+        $case=New-Case ('owner-invalid-'+$invalidScope)
+        Put $case.Config $case.Before.Replace("'custom:bailong'","'pet_fixture_native'")
+        $state=@{
+            'electron-renderer-content-owner'=$ownerA;
+            'electron-persisted-atom-state'=@{'migrated-cloud-pet-ids-v1'=@{'legacy-account'=@{'custom:bailong'='pet_fixture_native'}}};
+            ('electron-owner-atoms:'+$ownerB)=@{'migrated-cloud-pet-ids-v1'=@{'other-account'=@{'custom:bailong'='pet_fixture_native'}}}
+        }
+        if($invalidScope -eq 'invalid-owner') {$state['electron-renderer-content-owner']='invalid'}
+        if($invalidScope -eq 'null-owner') {$state['electron-renderer-content-owner']=$null}
+        if($invalidScope -eq 'invalid-map') {$state['electron-owner-atoms:'+$ownerA]=@{'migrated-cloud-pet-ids-v1'=@('invalid')}}
+        Put (Join-Path $case.Home '.codex-global-state.json') ($state|ConvertTo-Json -Depth 8)
+        $before=Hash $case.Config
+        $result=Run-Uninstall $case
+        Require (-not $result.SettingsChanged -and (Hash $case.Config) -eq $before) 'Invalid active owner fell back to stale migrations'
+    }
+    $passed.Add('invalid-active-owner-never-falls-back')
+
     $case=New-Case 'legacy-native'
     [IO.File]::Delete($case.ReceiptPath)
     $result=Run-Uninstall $case

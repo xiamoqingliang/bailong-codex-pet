@@ -5,14 +5,71 @@ callbacks; the original Pet still owns animation, history and chat cleanup.
 """
 from __future__ import annotations
 
+import threading
+
+
+class ExitWatchdog:
+    """Give shutdown one fixed budget, independently of Qt's event loop."""
+    def __init__(self, on_timeout, seconds=15.0):
+        if seconds <= 0:
+            raise ValueError("Shutdown timeout must be positive")
+        self.seconds = seconds
+        self._on_timeout = on_timeout
+        self._lock = threading.Lock()
+        self._timer = None
+        self._cancelled = False
+
+    def start(self):
+        with self._lock:
+            if self._timer is not None or self._cancelled:
+                return False
+            self._timer = threading.Timer(self.seconds, self._expired)
+            self._timer.daemon = True
+            self._timer.start()
+            return True
+
+    def _expired(self):
+        with self._lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+        self._on_timeout()
+
+    def cancel(self):
+        with self._lock:
+            self._cancelled = True
+            timer = self._timer
+        if timer is not None:
+            timer.cancel()
+
 
 class PetLifecycle:
     native_sync_ready = False
     applying_native_visibility = False
     host_pid = None
+    host_app_started_at = None
     exit_reason = None
     exit_host_pid = None
+    exit_host_app_started_at = None
     _local_hide_pending = False
+    _exit_watchdog = None
+
+    def follow_host(self, state):
+        """Learn this host's birth time without adopting a replacement host."""
+        if self.exit_reason is not None:
+            return False
+        if state and state.get("running") is True and type(state.get("pid")) is int:
+            started_at = state.get("appStartedAt")
+            if self.host_pid is not None and (
+                    state["pid"] != self.host_pid or
+                    self.host_app_started_at is not None and started_at is not None
+                    and started_at != self.host_app_started_at):
+                self.request_exit("codex-closed")
+                return False
+            self.host_pid = state["pid"]
+            if self.host_app_started_at is None:
+                self.host_app_started_at = started_at
+        return True
 
     def _hide_exit_ui(self):
         # Hide before chat.shutdown() can wait for a thread. Stop the original
@@ -41,6 +98,11 @@ class PetLifecycle:
         if self.exit_reason is None:
             self.exit_reason = reason
             self.exit_host_pid = self.host_pid
+            self.exit_host_app_started_at = self.host_app_started_at
+            if self._exit_watchdog is not None:
+                # Arm before any Qt call or chat cleanup can block. Retried
+                # closeEvents must not renew this process's shutdown budget.
+                self._exit_watchdog.start()
             self._hide_exit_ui()
             try:
                 self._publish_closing()
@@ -48,7 +110,8 @@ class PetLifecycle:
                 pass  # A status-file collision must not prevent actual exit.
             if reason == "user":
                 state = self._read_bridge_state()
-                if state and state.get("running") is True and state.get("pid") == self.exit_host_pid:
+                if (state and state.get("running") is True and state.get("pid") == self.exit_host_pid
+                        and state.get("appStartedAt") == self.exit_host_app_started_at):
                     try:
                         self._request_native_visibility(False, state)
                     except OSError:

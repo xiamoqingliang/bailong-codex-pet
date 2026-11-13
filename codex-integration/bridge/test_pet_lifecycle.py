@@ -53,6 +53,7 @@ class PetLifecycleTests(unittest.TestCase):
                 self.requests = []
                 self.closing_records = []
                 self.finished = 0
+                self._exit_watchdog = mock.Mock()
             def _read_bridge_state(self): return self.state
             def _native_can_show(self, state): return bool(state and state.get("overlayOpen"))
             def _request_native_visibility(self, visible, state): self.requests.append(visible)
@@ -110,6 +111,31 @@ class PetLifecycleTests(unittest.TestCase):
         self.pet.apply_native_hidden(False)
         self.assertTrue(self.pet.isVisible())
 
+    def test_user_exit_cannot_hide_a_replacement_host_with_the_same_pid(self):
+        self.pet.host_app_started_at = 10.0
+        self.pet.state["appStartedAt"] = 11.0
+        self.pet.close()
+        self.assertEqual(self.pet.requests, [])
+        self.assertEqual(self.pet.exit_host_app_started_at, 10.0)
+
+    def test_user_exit_can_hide_the_same_host_birth(self):
+        self.pet.host_app_started_at = self.pet.state["appStartedAt"] = 10.0
+        self.pet.close()
+        self.assertEqual(self.pet.requests, [False])
+        self.assertEqual(self.pet.exit_host_app_started_at, 10.0)
+
+    def test_first_birth_sample_is_learned_but_replacement_retires_the_old_worker(self):
+        state = dict(self.pet.state, appStartedAt=10.0)
+        self.assertTrue(self.pet.follow_host(state))
+        self.assertEqual(self.pet.host_app_started_at, 10.0)
+        self.assertIsNone(self.pet.exit_reason)
+        self.assertTrue(self.pet.follow_host(self.pet.state))  # A missing sample is not a restart.
+        self.assertEqual(self.pet.host_app_started_at, 10.0)
+        self.assertFalse(self.pet.follow_host(dict(state, appStartedAt=11.0)))
+        self.assertEqual(self.pet.exit_reason, "codex-closed")
+        self.assertEqual(self.pet.host_app_started_at, 10.0)
+        self.assertEqual(self.pet.requests, [])
+
     def test_deferred_original_close_cannot_reshow_any_ui(self):
         from PySide6.QtWidgets import QWidget
         attempts = []
@@ -144,6 +170,7 @@ class PetLifecycleTests(unittest.TestCase):
         self.assertEqual(self.pet.requests, [False])
         self.assertEqual(self.pet.exit_host_pid, 101)
         self.assertEqual(self.pet.closing_records, ["user"])
+        self.pet._exit_watchdog.start.assert_called_once_with()
         self.assertEqual(self.pet.messages, [])
 
     def test_host_exit_hides_everything_and_finishes_without_tray(self):
@@ -156,6 +183,7 @@ class PetLifecycleTests(unittest.TestCase):
         self.assertFalse(self.pet.bubble.isVisible())
         self.assertEqual(self.pet.requests, [])
         self.assertEqual(self.pet.exit_reason, "codex-closed")
+        self.pet._exit_watchdog.start.assert_called_once_with()
 
     def test_status_file_collision_does_not_prevent_exit(self):
         with mock.patch.object(self.pet, "_publish_closing", side_effect=PermissionError), \

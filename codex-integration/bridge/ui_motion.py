@@ -256,6 +256,9 @@ def attach(widget, owner, role):
                         and {self.role, other.role} in pairs), default=0)
 
         def show(self):
+            policy = getattr(owner, '_window_policy', None)
+            if policy is not None and not policy.allows(self.role):
+                return self.cancel()
             if self.intent and widget.isVisible() and not self.closing:
                 return
             was_visible = widget.isVisible()

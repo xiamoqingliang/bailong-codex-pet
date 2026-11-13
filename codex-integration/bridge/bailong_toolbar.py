@@ -169,6 +169,8 @@ def create_toolbar(original, pet, on_hide=None):
             if active is not None:
                 self._active = bool(active)
             visible = (self._active and self.owner.isVisible()
+                       and getattr(self.owner, "exit_reason", None) is None
+                       and not getattr(self.owner, "pet_only", False)
                        and not getattr(self.owner, "manual_hidden", False)
                        and not getattr(self.owner, "fullscreen_hidden", False)
                        and not getattr(self.owner, "_local_hide_animation", False)
@@ -182,7 +184,7 @@ def create_toolbar(original, pet, on_hide=None):
             if not visible:
                 self._press_global = None
                 self._dragging = False
-                if self._action_menu is not None:
+                if self._action_menu is not None and not getattr(self.owner, 'pet_only', False):
                     self._action_menu.hide()
 
         def set_active(self, active):

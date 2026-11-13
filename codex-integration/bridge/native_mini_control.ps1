@@ -477,16 +477,34 @@ public static class BailongMiniNativeControl {
         }
         function Test-FullPetHotkeySelection {
             if ($ExpectedNativePetVisible -cne 'true' -or
-                $ExpectedSelectedAvatarId -cnotmatch '^(custom:bailong-full|pet_[A-Za-z0-9_-]+)$') { return $false }
+                $ExpectedSelectedAvatarId -cnotmatch '^(custom:bailong-full(?:-local(?:-(?:[2-9]|1[0-6]))?)?|pet_[A-Za-z0-9_-]+)$') { return $false }
             try {
                 $config = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'bridge-config.json')) | ConvertFrom-Json
                 if (@($config.fullAvatarIds) -ccontains $ExpectedSelectedAvatarId) { return $true }
                 if (@($config.fullAvatarIds) -cnotcontains 'custom:bailong-full') { return $false }
+                $localIds = @($config.fullAvatarIds | Where-Object {
+                    $_ -is [string] -and $_ -cmatch '^custom:bailong-full(?:-local(?:-(?:[2-9]|1[0-6]))?)?$'
+                })
                 $statePath = Join-Path (Split-Path -Parent $ConfigPath) '.codex-global-state.json'
                 $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json
-                $migrations = $state.'electron-persisted-atom-state'.'migrated-cloud-pet-ids-v1'
+                if ($state -isnot [PSCustomObject]) { return $false }
+                # Newer Codex builds scope atoms to the active content owner.
+                # Never fall back to another owner's or legacy account state.
+                $owner = $state.PSObject.Properties['electron-renderer-content-owner']
+                if ($null -ne $owner) {
+                    if ($owner.Value -isnot [string] -or $owner.Value -cnotmatch '^[a-f0-9]{64}$') { return $false }
+                    $atoms = $state.PSObject.Properties['electron-owner-atoms:' + $owner.Value].Value
+                } else {
+                    $atoms = $state.'electron-persisted-atom-state'
+                }
+                if ($atoms -isnot [PSCustomObject]) { return $false }
+                $migrations = $atoms.'migrated-cloud-pet-ids-v1'
+                if ($migrations -isnot [PSCustomObject]) { return $false }
                 foreach ($account in $migrations.PSObject.Properties) {
-                    if ($account.Value.'custom:bailong-full' -ceq $ExpectedSelectedAvatarId) { return $true }
+                    if ($account.Value -isnot [PSCustomObject]) { continue }
+                    foreach ($localId in $localIds) {
+                        if ($account.Value.PSObject.Properties[$localId].Value -ceq $ExpectedSelectedAvatarId) { return $true }
+                    }
                 }
             } catch { }
             return $false

@@ -29,7 +29,7 @@ class WorkerDiagnosticTests(unittest.TestCase):
 
     def bridge_stubs(self):
         self.write_module("bridge_policy", "full_mode_visible = lambda state: False\n")
-        self.write_module("pet_lifecycle", "class PetLifecycle: pass\n")
+        self.write_module("pet_lifecycle", "class PetLifecycle: pass\nclass ExitWatchdog: pass\n")
         self.write_module("native_visibility", """
 class BoundedStateFile:
     def __init__(self, **kwargs): pass

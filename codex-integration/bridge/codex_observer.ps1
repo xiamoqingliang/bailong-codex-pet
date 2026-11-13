@@ -126,7 +126,11 @@ $onScreenCondition = New-Object Windows.Automation.PropertyCondition(
 $visibleImageCondition = New-Object Windows.Automation.AndCondition($imageCondition, $onScreenCondition)
 $petNameSuffixes = @(
     (-join [char[]]@(0x865A, 0x62DF, 0x5BA0, 0x7269)),
-    (-join [char[]]@(0x865B, 0x64EC, 0x5BF5, 0x7269))
+    (-join [char[]]@(0x865B, 0x64EC, 0x5BF5, 0x7269)),
+    # Current Mini labels the pet image with the localized companion suffix.
+    (-join [char[]]@(0x667A, 0x80FD, 0x4F19, 0x4F34)),
+    (-join [char[]]@(0x667A, 0x80FD, 0x5925, 0x4F34)),
+    (-join [char[]]@(0x5BF5, 0x7269))
 )
 $toolbarCache = @{}
 $knownOverlayHandles = @{}
@@ -262,7 +266,23 @@ function Read-GlobalPetIntent {
             if ($document.'electron-avatar-overlay-open' -is [bool]) {
                 $nextOpen = $document.'electron-avatar-overlay-open'
             }
-            $migrationMap = $document.'electron-persisted-atom-state'.'migrated-cloud-pet-ids-v1'
+            # New Codex versions scope persisted atoms to the current owner.
+            # A present owner is authoritative; never reuse another account's
+            # atoms or stale legacy migrations while that owner is unavailable.
+            $atomState = $null
+            $ownerProperty = $document.PSObject.Properties['electron-renderer-content-owner']
+            if ($null -ne $ownerProperty) {
+                $owner = $ownerProperty.Value
+                if ($owner -is [string] -and $owner -cmatch '^[0-9a-f]{64}$') {
+                    $ownerAtoms = $document.PSObject.Properties['electron-owner-atoms:' + $owner]
+                    if ($null -ne $ownerAtoms -and $ownerAtoms.Value -is [PSCustomObject]) {
+                        $atomState = $ownerAtoms.Value
+                    }
+                }
+            } else {
+                $atomState = $document.'electron-persisted-atom-state'
+            }
+            $migrationMap = $atomState.'migrated-cloud-pet-ids-v1'
             if ($null -ne $migrationMap -and $migrationMap -isnot [PSCustomObject]) {
                 throw [FormatException]::new('Invalid pet migration state')
             }

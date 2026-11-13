@@ -49,6 +49,7 @@ def create_dock_controls(pet):
 
         def refresh(self):
             enabled = (pet.isVisible() and not pet.manual_hidden and not pet.fullscreen_hidden
+                       and not getattr(pet, 'pet_only', False)
                        and getattr(pet, 'exit_reason', None) is None)
             cursor = QCursor.pos()
             rect = pet.dock_rect().toAlignedRect() if pet.dock_edge else pet.rect()

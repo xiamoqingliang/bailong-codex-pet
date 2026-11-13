@@ -3,6 +3,7 @@ import json
 import io
 import logging
 import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 import tempfile
@@ -192,6 +193,187 @@ class StartupTests(unittest.TestCase):
             state = json.loads((base / "bridge-status.json").read_text())
             self.assertEqual(state["lastWorkerExit"]["workerStage"], "qt-init")
             self.assertEqual(state["lastWorkerExit"]["code"], 3)
+
+
+class OwnedWorkerShutdownTests(unittest.TestCase):
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+            self.on_sleep = lambda: None
+
+        def sleep(self, seconds):
+            self.now += seconds
+            if self.now > 100:
+                raise AssertionError("fixture exceeded bounded shutdown")
+            self.on_sleep()
+
+    class Child:
+        def __init__(self, pid, clock):
+            self.pid, self.clock = pid, clock
+            self.result = None
+            self.killed_at = []
+
+        def poll(self):
+            return self.result
+
+        def kill(self):
+            self.killed_at.append(self.clock.now)
+            self.result = 1
+
+        def wait(self, timeout):
+            if self.result is None:
+                raise subprocess.TimeoutExpired("inert child", timeout)
+            return self.result
+
+    def run_scenario(self, *, reason="codex-closed", phase="closing", new_host=True,
+                     intent_at=1.0, reuse_pid=False, natural_exit_at=None,
+                     natural_exit_code=7, show_cycle=False):
+        with tempfile.TemporaryDirectory(prefix="bailong-stuck-worker-") as folder:
+            base = Path(folder) / "codex-integration/bridge"
+            base.mkdir(parents=True)
+            for name in ("bridge_pet.py", "codex_observer.ps1"):
+                (base / name).write_text("# inert fixture")
+            clock = self.Clock()
+            observer = self.Child(9100, clock)
+            workers = []
+            first_host = replace(OPEN, app_started_at=10.0)
+            next_host = replace(first_host, pid=OPEN.pid if reuse_pid else 789, app_started_at=11.0)
+            intent_written = False
+
+            def launch(command, _base):
+                if Path(command[1]).name != "bridge_pet.py":
+                    return observer
+                self.assertFalse((base / "pet.stop").exists(), "old stop must not kill the next worker")
+                worker = self.Child(9200 + len(workers), clock)
+                workers.append(worker)
+                return worker
+
+            def observation(*args, **kwargs):
+                if show_cycle and 1.0 <= clock.now < 2.0:
+                    return replace(first_host, overlay_open=False)
+                if new_host and clock.now >= 2.0:
+                    return next_host
+                if new_host and clock.now >= 1.0 and not reuse_pid:
+                    return Observation(False, False, None)
+                return first_host
+
+            def on_sleep():
+                nonlocal intent_written
+                if reason is not None and not intent_written and workers and clock.now >= intent_at:
+                    (base / "pet-status.json").write_text(json.dumps({
+                        "pid": workers[0].pid, "updatedAt": time.time(), "phase": phase,
+                        "exitReason": reason, "exitHostPid": first_host.pid, "stage": "running"}))
+                    intent_written = True
+                if natural_exit_at is not None and workers and clock.now >= natural_exit_at:
+                    workers[0].result = natural_exit_code
+                if clock.now >= 25.0:
+                    (base / "supervisor.stop").write_text("fixture complete")
+                    observer.result = 0
+                    for worker in workers[1:]:
+                        worker.result = 0
+
+            clock.on_sleep = on_sleep
+            mutex = Mock()
+            mutex.acquire.return_value = True
+            controller = Mock(process=None)
+            controller.status.return_value = {}
+            with (patch.object(supervisor, "WindowsMutex", return_value=mutex),
+                  patch.object(supervisor, "NativeMiniController", return_value=controller),
+                  patch.object(supervisor, "launch_hidden", side_effect=launch),
+                  patch.object(supervisor, "read_observation", side_effect=observation),
+                  patch.object(supervisor, "process_alive", return_value=False),
+                  patch("detached_launcher.process_requires_detach", return_value=False),
+                  patch.object(supervisor.time, "monotonic", side_effect=lambda: clock.now),
+                  patch.object(supervisor.time, "sleep", side_effect=clock.sleep),
+                  patch.object(supervisor, "request_visibility") as visibility):
+                self.assertEqual(supervisor.run_supervisor(base), 0)
+            state = json.loads((base / "bridge-status.json").read_text())
+            return workers, state, visibility.call_args_list
+
+    def test_stuck_auto_close_is_reaped_after_twenty_seconds_and_new_host_launches(self):
+        workers, state, visibility = self.run_scenario()
+        self.assertEqual(len(workers), 2)
+        self.assertGreaterEqual(workers[0].killed_at[0], 21.0)
+        self.assertLess(workers[0].killed_at[0], 21.2)
+        self.assertEqual(state["lastWorkerExit"]["reason"], "codex-closed")
+        self.assertTrue(state["lastWorkerExit"]["verified"])
+        self.assertTrue(state["lastWorkerExit"]["forcedTermination"])
+        self.assertEqual(state["workerCrashRetries"], 0)
+        self.assertEqual(visibility, [])
+
+    def test_stuck_user_quit_stays_suppressed_after_forced_termination(self):
+        for phase in ("closing", "stopped"):
+            with self.subTest(phase=phase):
+                workers, state, visibility = self.run_scenario(reason="user", phase=phase, new_host=False)
+                self.assertEqual(len(workers), 1)
+                self.assertEqual(len(workers[0].killed_at), 1)
+                self.assertEqual(state["lastWorkerExit"]["reason"], "user")
+                self.assertEqual(state["workerCrashRetries"], 0)
+                self.assertEqual(len(visibility), 1)
+
+    def test_old_host_without_closing_record_cannot_block_new_host(self):
+        workers, state, visibility = self.run_scenario(reason=None)
+        self.assertEqual(len(workers), 2)
+        self.assertGreaterEqual(workers[0].killed_at[0], 21.0)
+        self.assertEqual(state["lastWorkerExit"]["reason"], "codex-closed")
+        self.assertFalse(state["lastWorkerExit"]["verified"], "inferred retirement is not worker status")
+        self.assertEqual(visibility, [])
+
+    def test_old_user_close_never_hides_reused_pid_with_new_start_time(self):
+        workers, state, visibility = self.run_scenario(reason="user", intent_at=3.0, reuse_pid=True)
+        self.assertEqual(len(workers), 2)
+        self.assertEqual(visibility, [])
+        self.assertEqual(state["lastWorkerExit"]["reason"], "user")
+
+    def test_watchdog_exit_code_preserves_trusted_user_close_without_relaunch(self):
+        workers, state, _ = self.run_scenario(reason="user", new_host=False, natural_exit_at=15.0)
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0].killed_at, [])
+        self.assertEqual(state["lastWorkerExit"]["code"], 7)
+        self.assertEqual(state["lastWorkerExit"]["reason"], "user")
+        self.assertEqual(state["workerCrashRetries"], 0)
+
+    def test_old_user_close_cannot_hide_same_host_new_show_cycle(self):
+        # Cover both request_visibility branches in the actual supervisor
+        # loop: still-alive stopped status, and an already-exited old worker.
+        for exit_at in (2.0, 4.0):
+            with self.subTest(exit_at=exit_at):
+                workers, _, visibility = self.run_scenario(
+                    reason="user", phase="stopped", new_host=False, intent_at=2.0,
+                    natural_exit_at=exit_at, natural_exit_code=0, show_cycle=True)
+                self.assertEqual(len(workers), 2)
+                self.assertEqual(visibility, [], "old close must not Hide the new explicit Show")
+
+    def test_final_shutdown_is_bounded_and_only_kills_retained_worker(self):
+        clock = self.Clock()
+        worker, observer, native = (self.Child(pid, clock) for pid in (11, 22, 33))
+        with (patch.object(supervisor.time, "monotonic", side_effect=lambda: clock.now),
+              patch.object(supervisor.time, "sleep", side_effect=clock.sleep)):
+            remaining = supervisor.shutdown_owned_children(worker, observer, native, Mock())
+        self.assertGreaterEqual(clock.now, 20.0)
+        self.assertLess(clock.now, 20.3)
+        self.assertEqual(len(worker.killed_at), 1)
+        self.assertEqual(observer.killed_at, [])
+        self.assertEqual(native.killed_at, [])
+        self.assertEqual(remaining, [22, 33])
+
+    def test_final_shutdown_does_not_restart_an_existing_closing_budget(self):
+        clock = self.Clock()
+        clock.now = 18.0
+        worker = self.Child(11, clock)
+        with (patch.object(supervisor.time, "monotonic", side_effect=lambda: clock.now),
+              patch.object(supervisor.time, "sleep", side_effect=clock.sleep)):
+            self.assertEqual(supervisor.shutdown_owned_children(worker, None, None, Mock(), closing_at=0.0), [])
+        self.assertLess(clock.now, 20.5)
+        self.assertEqual(len(worker.killed_at), 1)
+
+    def test_fresh_host_evidence_is_required_for_retirement(self):
+        host = (OPEN.pid, 10.0)
+        self.assertFalse(supervisor.worker_host_retired(host, None))
+        self.assertFalse(supervisor.worker_host_retired(host, replace(OPEN, app_started_at=None)))
+        self.assertFalse(supervisor.worker_host_retired(host, replace(OPEN, app_started_at=10.0)))
+        self.assertTrue(supervisor.worker_host_retired(host, replace(OPEN, app_started_at=11.0)))
+        self.assertTrue(supervisor.worker_host_retired(host, Observation(False, False, None)))
 
 
 class LifecycleTests(unittest.TestCase):
@@ -427,6 +609,23 @@ class WindowsIntegrationTests(unittest.TestCase):
             self.assertEqual(child.wait(timeout=10), 0)
             self.assertEqual((base / "completed.txt").read_text(), "ok")
             self.assertFalse(process_alive(child.pid))
+
+    def test_shutdown_timeout_reclaims_only_its_real_disposable_child(self):
+        with tempfile.TemporaryDirectory(prefix="bailong-owned-shutdown-") as directory:
+            child = launch_hidden([str(pythonw_path()), "-c", "import time; time.sleep(30)"],
+                                  Path(directory))
+            try:
+                started = time.monotonic()
+                with patch.object(supervisor, "WORKER_SHUTDOWN_SECONDS", 0.2):
+                    remaining = supervisor.shutdown_owned_children(child, None, None, Mock())
+                self.assertEqual(remaining, [])
+                self.assertIsNotNone(child.poll())
+                self.assertLess(time.monotonic() - started, 3)
+                self.assertTrue(process_alive(os.getpid()))
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
 
 
 if __name__ == "__main__":

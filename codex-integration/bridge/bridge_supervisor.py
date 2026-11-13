@@ -31,6 +31,8 @@ STATE_MAX_AGE = 15.0
 POLL_SECONDS = 0.1
 WORKER_RETRY_SECONDS = 30.0
 MAX_WORKER_RETRIES = 3
+WORKER_SHUTDOWN_SECONDS = 20.0
+WORKER_KILL_WAIT_SECONDS = 1.0
 _OBSERVATION_READER = BoundedStateFile(max_age=STATE_MAX_AGE, validator=valid_observer_state)
 
 
@@ -201,9 +203,9 @@ def read_worker_exit(path: Path, worker_pid: int, returncode: int,
     data = BoundedStateFile(max_age=None).read(path, minimum_mtime=minimum_mtime)
     if not data or type(data.get("pid")) is not int or data["pid"] != worker_pid:
         return fallback
-    phase = "closing" if closing else ("stopped" if returncode == 0 else "error")
+    phases = ("closing", "stopped") if closing else (("stopped",) if returncode == 0 else ("error",))
     stamp = data.get("updatedAt")
-    if (data.get("phase") != phase or type(stamp) not in (int, float)
+    if (data.get("phase") not in phases or type(stamp) not in (int, float)
             or stamp < minimum_mtime or stamp > time.time() + 2):
         return fallback
     reason = data.get("exitReason")
@@ -230,6 +232,46 @@ def read_worker_stage(path: Path, worker_pid: int, minimum_mtime: float) -> dict
     phase, stage = data.get("phase"), data.get("stage")
     return {"workerPhase": phase if isinstance(phase, str) and phase in phases else "unknown",
             "workerStage": stage if isinstance(stage, str) and stage in stages else "unknown"}
+
+
+def worker_host_retired(host: tuple[int, float | None] | None,
+                        observation: Observation | None) -> bool:
+    """Only a fresh, definite host disappearance or replacement retires a worker."""
+    return bool(host is not None and observation is not None and (
+        not observation.running or observation.pid != host[0]
+        or (host[1] is not None and observation.app_started_at is not None
+            and observation.app_started_at != host[1])))
+
+
+def kill_owned_worker(worker: subprocess.Popen, logger: logging.Logger) -> int | None:
+    """Terminate only our retained child handle, never reopen a saved PID."""
+    result = worker.poll()
+    if result is not None:
+        return result
+    logger.warning("worker graceful shutdown timed out; terminating owned child pid=%d", worker.pid)
+    try:
+        worker.kill()
+        return worker.wait(timeout=WORKER_KILL_WAIT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        logger.warning("owned worker termination pending pid=%d: %s", worker.pid, type(error).__name__)
+        return worker.poll()
+
+
+def shutdown_owned_children(worker, observer, native_process, logger, *, closing_at=None) -> list[int]:
+    """Bound graceful shutdown; only the retained animation worker may be killed."""
+    children = [child for child in (worker, observer, native_process) if child is not None]
+    started = time.monotonic()
+    deadline = started + WORKER_SHUTDOWN_SECONDS
+    worker_deadline = min(deadline, closing_at + WORKER_SHUTDOWN_SECONDS) if closing_at is not None else deadline
+    kill_attempted = False
+    while any(child.poll() is None for child in children) and time.monotonic() < deadline:
+        if worker is not None and not kill_attempted and time.monotonic() >= worker_deadline:
+            kill_owned_worker(worker, logger)
+            kill_attempted = True
+        time.sleep(0.2)
+    if worker is not None and not kill_attempted and worker.poll() is None:
+        kill_owned_worker(worker, logger)
+    return [child.pid for child in children if child.poll() is None]
 
 
 
@@ -410,6 +452,11 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
     worker_generation = 0
     worker_started_at = 0.0
     worker_closing = None
+    worker_closing_at = None
+    worker_host = None
+    worker_force_requested = False
+    worker_kill_retry_at = 0.0
+    worker_stop_requested = False
     last_worker_exit = None
     policy = WorkerPolicy()
     old_control = previous.get('nativeControl') if isinstance(previous, dict) else None
@@ -489,45 +536,84 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
                 result = worker.poll()
                 if result is not None:
                     stage = read_worker_stage(base / "pet-status.json", worker.pid, worker_started_at)
-                    exit_info = read_worker_exit(base / "pet-status.json", worker.pid, result, worker_started_at)
+                    # Forced termination/watchdog codes do not overwrite a
+                    # verified asynchronous Quit or an observed old-host close.
+                    exit_info = worker_closing or read_worker_exit(
+                        base / "pet-status.json", worker.pid, result, worker_started_at)
                     logger.info("worker exited code=%d reason=%s verified=%s hostPid=%s stage=%s",
                                 result, exit_info.reason, exit_info.verified, exit_info.host_pid,
                                 stage["workerStage"])
                     last_worker_exit = {"code": result, "reason": exit_info.reason,
                                         "verified": exit_info.verified, "hostPid": exit_info.host_pid,
+                                        "hostStartedAt": worker_host[1] if worker_host else None,
+                                        "generation": worker_generation,
+                                        "forcedTermination": worker_force_requested,
                                         **stage}
                     status["lastWorkerExit"] = last_worker_exit
                     worker = None
-                    policy.exited(result, now, worker_generation,
+                    policy.exited(0 if worker_closing is not None else result, now, worker_generation,
                                   exit_reason=exit_info.reason, exit_host_pid=exit_info.host_pid)
-                    if result == 0 and worker_closing is None and exit_info.should_hide(observation):
+                    if (result == 0 and worker_closing is None and exit_info.should_hide(observation)
+                            and worker_generation == policy.generation
+                            and not worker_host_retired(worker_host, observation)):
                         request_visibility(base, False, {"pid": observation.pid,
                             "appStartedAt": observation.app_started_at,
                             "selectedAvatarId": observation.selected_avatar_id})
                     worker_closing = None
+                    worker_closing_at = None
+                    worker_host = None
+                    worker_force_requested = False
                 else:
-                    if worker_closing is None:
+                    if worker_closing is None or not worker_closing.verified:
                         intent = read_worker_exit(base / "pet-status.json", worker.pid, 0,
                                                   worker_started_at, closing=True)
                         if intent.verified:
                             worker_closing = intent
+                            if worker_closing_at is None:
+                                worker_closing_at = now
                             policy.exited(0, now, worker_generation,
                                           exit_reason=intent.reason, exit_host_pid=intent.host_pid)
                             logger.info("worker closing reason=%s hostPid=%s", intent.reason, intent.host_pid)
-                            if intent.should_hide(observation):
+                            if (intent.should_hide(observation) and worker_generation == policy.generation
+                                    and not worker_host_retired(worker_host, observation)):
                                 request_visibility(base, False, {"pid": observation.pid,
                                     "appStartedAt": observation.app_started_at,
                                     "selectedAvatarId": observation.selected_avatar_id})
+                    if worker_closing is None and worker_host_retired(worker_host, observation):
+                        # A stuck worker may never publish closing. A fresh
+                        # host replacement still retires this launch, without
+                        # guessing that the user clicked Quit or hiding Mini.
+                        worker_closing = WorkerExit("codex-closed", worker_host[0])
+                        worker_closing_at = now
+                        policy.exited(0, now, worker_generation, exit_reason="codex-closed",
+                                      exit_host_pid=worker_host[0])
+                        logger.info("retiring worker after host closed pid=%d hostPid=%d", worker.pid, worker_host[0])
+                        signal_stop(base, "pet.stop")
+                        worker_stop_requested = True
+                    if (worker_closing_at is not None and now - worker_closing_at >= WORKER_SHUTDOWN_SECONDS
+                            and now >= worker_kill_retry_at):
+                        worker_force_requested = True
+                        kill_owned_worker(worker, logger)
+                        worker_kill_retry_at = now + 2.0
                     if worker_closing is None and observation is not None and observation.visible:
                         # Only an active worker adopts a new Show/host cycle.
                         # A closing worker cannot become that cycle's owner.
                         worker_generation = policy.started()
+                        if worker_host is not None and worker_host[1] is None:
+                            worker_host = (worker_host[0], observation.app_started_at)
             if worker is None and policy.should_launch(now):
                 worker_generation = policy.started()
                 worker_closing = None
+                worker_closing_at = None
+                worker_force_requested = False
+                worker_kill_retry_at = 0.0
                 try:
+                    if worker_stop_requested:
+                        (base / "pet.stop").unlink(missing_ok=True)
+                        worker_stop_requested = False
                     worker_started_at = time.time()
                     worker = launch_hidden(worker_command, base)
+                    worker_host = (observation.pid, observation.app_started_at)
                     logger.info("worker started pid=%d generation=%d", worker.pid, worker_generation)
                 except OSError as error:
                     policy.exited(1, now, worker_generation)
@@ -554,6 +640,10 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
                               fullVisible=observation.visible if observation else False,
                               nativeControl=native_control.status(),
                               lastWorkerExit=last_worker_exit,
+                              workerClosingReason=worker_closing.reason if worker_closing else None,
+                              workerHost=list(worker_host) if worker_host else None,
+                              workerClosingSeconds=(max(0.0, now - worker_closing_at)
+                                                    if worker_closing_at is not None else None),
                               workerCrashRetries=policy.crash_retries)
                 status.update(read_worker_stage(base / "pet-status.json", worker.pid, worker_started_at)
                               if worker is not None else {"workerPhase": None, "workerStage": None})
@@ -580,18 +670,15 @@ def run_supervisor(base: Path = BASE, *, show_on_start=False) -> int:
                 signal_stop(base, name)
             except OSError as error:
                 logger.warning("stop write failed %s: %s", name, type(error).__name__)
-        deadline = time.monotonic() + 15.0
-        # The native UI helper is one-shot; let it exit naturally as well.
-        # There is no persistent UI watcher and no native process is killed.
-        children = [child for child in (worker, observer, native_control.process) if child is not None]
-        while any(child.poll() is None for child in children) and time.monotonic() < deadline:
-            time.sleep(0.2)
-        remaining = [child.pid for child in children if child.poll() is None]
+        remaining = shutdown_owned_children(worker, observer, native_control.process, logger,
+                                            closing_at=worker_closing_at)
         if remaining:
-            logger.warning("graceful shutdown still pending for child pids=%s; no process killed", remaining)
+            logger.warning("shutdown still pending for owned child pids=%s", remaining)
         native_control._poll(time.monotonic())
         status.update(updatedAt=utc_now(), phase="stopped", stoppedAt=utc_now(), exitCode=exit_code,
                       stopReason=stop_reason,
+                      workerClosingReason=worker_closing.reason if worker_closing else None,
+                      workerHost=list(worker_host) if worker_host else None,
                       workerPid=worker.pid if worker is not None and worker.poll() is None else None,
                       observerPid=observer.pid if observer is not None and observer.poll() is None else None,
                       pendingChildPids=remaining, overlayOpen=False, nativeOverlayOpen=False,

@@ -12,6 +12,13 @@ import bridge_pet
 
 class LoadingExitTests(unittest.TestCase):
     def test_host_closes_before_first_decode_leaves_no_loading_window(self):
+        self.assert_loading_cancelled({"running": True, "pid": 101}, {"running": False, "pid": None})
+
+    def test_host_birth_changes_before_first_decode_cancel_the_old_worker(self):
+        self.assert_loading_cancelled({"running": True, "pid": 101, "appStartedAt": 10.0},
+                                      {"running": True, "pid": 101, "appStartedAt": 11.0})
+
+    def assert_loading_cancelled(self, visible, ending):
         program = r'''
 import os,sys,json
 from pathlib import Path
@@ -31,7 +38,8 @@ class Server:
     def listen(self,*a):return True
     def close(self):pass
 records=[]
-visible={'running':True,'pid':101}
+visible=json.loads(sys.argv[3])
+ending=json.loads(sys.argv[4])
 with mock.patch.object(original,'QLocalSocket',Socket), mock.patch.object(original,'QLocalServer',Server), \
      mock.patch.object(original,'ASSETS',fixture), \
      mock.patch.object(original.Pet,'load',side_effect=AssertionError('Decoder must not run after host closes')), \
@@ -39,7 +47,7 @@ with mock.patch.object(original,'QLocalSocket',Socket), mock.patch.object(origin
      mock.patch.object(desktop_chat_link,'install_desktop_chat_link'), \
      mock.patch.object(bridge_pet,'STOP_FILE',fixture/'pet.stop'), \
      mock.patch.object(bridge_pet,'save_status',side_effect=records.append), \
-     mock.patch.object(bridge_pet,'read_state',side_effect=[visible,visible,{'running':False,'pid':None}]):
+     mock.patch.object(bridge_pet,'read_state',side_effect=[visible,visible,ending]):
     assert bridge_pet.main()==0
 assert records[-1]['phase']=='stopped'
 assert records[-1]['exitReason']=='codex-closed'
@@ -49,7 +57,7 @@ print(json.dumps({'passed':True,'decodedFrames':0,'visibleWindows':0}))
 '''
         with tempfile.TemporaryDirectory(prefix="bailong-loading-exit-") as directory:
             result = subprocess.run([sys.executable, "-c", program,
-                str(Path(bridge_pet.__file__).parent), directory],
+                str(Path(bridge_pet.__file__).parent), directory, json.dumps(visible), json.dumps(ending)],
                 capture_output=True, timeout=10,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))

@@ -4,16 +4,16 @@
 
 ![白龙桌宠 Codex 完整适配版宣传图](docs/images/v051-promo.png)
 
-基于 [jingh12312-rgb / bailong-desktop-pet](https://github.com/jingh12312-rgb/bailong-desktop-pet) **v0.5.1** 制作，适配版本为 **v0.5.1.1**。已获原作者同意以 fork 形式免费发布，不用于商业用途，非 OpenAI 官方产品。
+基于 [jingh12312-rgb / bailong-desktop-pet](https://github.com/jingh12312-rgb/bailong-desktop-pet) **v0.5.1** 制作，适配版本为 **v0.5.1.2**。已获原作者同意以 fork 形式免费发布，不用于商业用途，非 OpenAI 官方产品。
 
 ## 下载
 
-当前版本：**v0.5.1.1**。面向 Windows 10/11 x64 与 Codex 桌面版，完整安装包约 **298 MiB**。
+当前版本：**v0.5.1.2**。面向 Windows 10/11 x64 与 Codex 桌面版，完整安装包约 **298 MiB**。
 
 | 文件 | 下载 |
 | --- | --- |
-| 完整安装包 | [下载 Windows x64 完整版](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v0.5.1.1/Bailong-Codex-v051-0.5.1.1-windows-x64.zip) |
-| SHA-256 校验文件 | [下载 SHA256SUMS.txt](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v0.5.1.1/SHA256SUMS.txt) |
+| 完整安装包 | [下载 Windows x64 完整版](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v0.5.1.2/Bailong-Codex-v051-0.5.1.2-windows-x64.zip) |
+| SHA-256 校验文件 | [下载 SHA256SUMS.txt](https://github.com/xiamoqingliang/bailong-codex-pet/releases/download/v0.5.1.2/SHA256SUMS.txt) |
 
 完整解压后提供 **一键安装到Codex.cmd** 与 **一键卸载白龙.cmd**，无需另装 Python。日常使用下载完整安装包即可；GitHub 自动生成的 Source code 是源码。
 
@@ -123,7 +123,7 @@
 
 ## 项目文档
 
-运行代码与维护工具保留在仓库中。查看 [源码与开发说明](docs/SOURCE.md)、[项目架构与运行流程](docs/项目架构与流程-v0.5.1.1.md)。普通使用者直接使用完整安装包即可。
+运行代码与维护工具保留在仓库中。查看 [源码与开发说明](docs/SOURCE.md)、[项目架构与运行流程](docs/项目架构与流程-v0.5.1.2.md)。普通使用者直接使用完整安装包即可。
 
 ## 致谢与许可
 

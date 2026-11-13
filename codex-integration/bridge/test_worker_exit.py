@@ -158,6 +158,11 @@ class WorkerExitFileTests(unittest.TestCase):
         self.assertEqual(read_worker_exit(self.path, 222, 0, self.started, closing=True),
                          WorkerExit("unknown"))
 
+    def test_stopped_status_is_closing_intent_while_python_threads_still_keep_process_alive(self):
+        self.write(phase="stopped", exitReason="user")
+        self.assertEqual(read_worker_exit(self.path, 222, 0, self.started, closing=True),
+                         WorkerExit("user", 111, True))
+
     def test_wrong_pid_old_stamp_invalid_phase_and_reason_are_not_trusted(self):
         for changes in ({"pid": 223}, {"pid": True}, {"updatedAt": self.started - 1},
                         {"updatedAt": time.time() + 10}, {"updatedAt": True},

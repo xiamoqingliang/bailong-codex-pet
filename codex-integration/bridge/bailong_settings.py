@@ -80,7 +80,7 @@ def create_settings(pet):
             content.setStyleSheet('background:transparent;')
             layout = QVBoxLayout(content)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(10)
+            layout.setSpacing(8)
             scroll.setWidget(content)
             chrome.addWidget(scroll, 1)
             self.scroll = scroll
@@ -112,6 +112,7 @@ def create_settings(pet):
             for key, caption, attr, callback in (
                 ('movement', '自动移动', 'auto_movement_disabled', pet.set_auto_movement_disabled),
                 ('fixed', '固定桌宠', 'fixed_pet', pet.set_fixed_pet),
+                ('petOnly', '独显桌宠', 'pet_only', pet.set_pet_only),
                 ('fullscreen', '全屏时自动隐藏', 'auto_hide_fullscreen', pet.set_auto_hide_fullscreen),
                 ('notifications', 'Codex 任务气泡提醒', 'task_bubbles_disabled', pet.set_task_bubbles_disabled),
                 ('sound', '播放音效', 'sound_disabled', pet.set_sound_disabled),
@@ -123,6 +124,8 @@ def create_settings(pet):
                 self.checks[key] = (checkbox, attr, inverted)
                 if key == 'fixed':
                     checkbox.setToolTip('自发移动时只播放动画；用户拖拽或手动选择移动动作仍可改变位置。')
+                elif key == 'petOnly':
+                    checkbox.setToolTip('只显示白龙，隐藏常驻控制栏、任务卡和自动提示；右键菜单与托盘照常使用。')
                 layout.addWidget(checkbox)
             hint = QLabel('关闭任务气泡后，互动、额度和任务卡仍可使用。')
             hint.setWordWrap(True)

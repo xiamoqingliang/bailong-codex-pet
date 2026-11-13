@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -23,20 +24,47 @@ _LAST_SELECTION_CONTEXT = None
 
 
 def write_json(path, value):
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    for attempt in range(3):
+    temporary = None
+    try:
+        # Shutdown's watchdog can publish while Qt finishes its last update.
+        # Each writer owns its temporary file; no shared lock can hold up exit.
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.{os.getpid()}.", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+        for attempt in range(3):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.01)
+    finally:
+        # Never remove a concurrent writer's file, including after failure.
         try:
-            os.replace(temporary, path)
-            return
-        except PermissionError:
-            if attempt == 2:
-                raise
-            time.sleep(0.01)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def save_status(value):
     write_json(STATUS_FILE, {"stage": _STARTUP_STAGE, **value})
+
+
+def force_shutdown_exit(reason, host_pid):
+    """Retire this worker after its cleanup budget, preserving why it closed."""
+    try:
+        save_status({"pid": os.getpid(), "phase": "stopped", "updatedAt": time.time(),
+                     "exitReason": reason or "error", "exitHostPid": host_pid,
+                     "exitWatchdogExpired": True, "visible": False,
+                     "toolbarVisible": False, "trayVisible": False})
+    finally:
+        # No Qt methods here: this runs even when its main thread is blocked.
+        # A failed status write must not strand the singleton process forever.
+        os._exit(0)
 
 
 def report_stage(stage, phase="initializing"):
@@ -82,7 +110,7 @@ try:
     if __name__ == "__main__":
         report_stage("bridge-import")
     from bridge_policy import full_mode_visible
-    from pet_lifecycle import PetLifecycle
+    from pet_lifecycle import ExitWatchdog, PetLifecycle
     from native_visibility import (BoundedStateFile, mask_ready, observer_generation,
                                    request_visibility, valid_observer_state)
     _STATE_READER = BoundedStateFile(max_age=15.0, validator=valid_observer_state)
@@ -172,22 +200,28 @@ def main():
 
     starting_state = read_state()
     starting_host = starting_state.get("pid") if starting_state else None
+    starting_host_birth = starting_state.get("appStartedAt") if starting_state else None
 
     class LoadingCancelled(Exception):
         def __init__(self, reason):
             self.reason = reason
 
     def check_loading_host():
-        nonlocal starting_host
+        nonlocal starting_host, starting_host_birth
         if STOP_FILE.exists():
             raise LoadingCancelled("supervisor-stop")
         state = read_state()
         if state and state.get("running") is False:
             raise LoadingCancelled("codex-closed")
         if state and state.get("running") is True:
-            if starting_host is not None and state.get("pid") != starting_host:
+            birth = state.get("appStartedAt")
+            if starting_host is not None and (
+                    state.get("pid") != starting_host or
+                    starting_host_birth is not None and birth is not None and birth != starting_host_birth):
                 raise LoadingCancelled("codex-closed")
             starting_host = state.get("pid")
+            if starting_host_birth is None:
+                starting_host_birth = birth
 
     class LinkedPet(PetLifecycle, V051Behavior, original.Pet):
         toolbar = None
@@ -195,6 +229,11 @@ def main():
         loading = True
         _read_bridge_state = staticmethod(read_state)
         _finish_exit = staticmethod(lambda: original.QApplication.exit(0))
+
+        def __init__(self):
+            self._exit_watchdog = ExitWatchdog(
+                lambda: force_shutdown_exit(self.exit_reason, self.exit_host_pid))
+            super().__init__()
 
         def _request_native_visibility(self, visible, state):
             request_visibility(DIRECTORY, visible, state)
@@ -231,6 +270,8 @@ def main():
         widget = LinkedPet()
         check_loading_host()
         widget.loading = False
+        widget.host_pid = starting_host
+        widget.host_app_started_at = starting_host_birth
     except LoadingCancelled as cancelled:
         # Construction has not entered app.exec(). Retire its loading dialog
         # and any partially prepared tray, instead of decoding all 2529 frames
@@ -245,9 +286,6 @@ def main():
                      "exitReason": cancelled.reason, "exitHostPid": starting_host})
         return 0
     report_stage("controls-init")
-    initial_state = read_state()
-    if initial_state and type(initial_state.get("pid")) is int:
-        widget.host_pid = initial_state["pid"]
     widget.native_sync_ready = True
     toolbar = create_toolbar(original, widget)
     activity_cards = create_activity_cards(original, widget, on_activate=lambda key: activity_runtime.activate(key))
@@ -289,8 +327,8 @@ def main():
                     widget.request_exit("supervisor-stop")
                     return
                 state = read_state()
-                if state and state.get("running") is True and type(state.get("pid")) is int:
-                    widget.host_pid = state["pid"]
+                if not widget.follow_host(state):
+                    return
                 active = widget.allow_native_visible(state, full_mode_visible(state) and mask_ready(DIRECTORY, state))
                 if state and state.get("running") is False:
                     widget.request_exit("codex-closed")
@@ -327,6 +365,7 @@ def main():
                         "mode": "dedicated-toolbar", "upstreamVersion": "0.5.1", "fullSelected": active,
                         "dockEdge": widget.dock_edge, "sizePercent": widget.size_percent,
                         "fixedPet": widget.fixed_pet,
+                        "petOnly": widget.pet_only,
                         "dockControlsVisible": widget.dock_controls.visible,
                         "desktopSyncRunningCount": len(widget.desktop_sync.running),
                         "desktopSyncErrorCount": widget.desktop_sync.errors,
@@ -397,6 +436,7 @@ def main():
     server.close()
     save_status({"pid": os.getpid(), "phase": "stopped", "updatedAt": time.time(),
                  "exitReason": widget.exit_reason or "user", "exitHostPid": widget.exit_host_pid or widget.host_pid})
+    widget._exit_watchdog.cancel()
     return result
 
 

@@ -1,11 +1,11 @@
-"""Coordinate expanded windows without affecting independent speech/history."""
+"""Coordinate expanded windows and optional pet-only presentation."""
 import sys
 import time
 
 
 def create_window_policy(pet):
     from PySide6.QtCore import QObject, QEvent, QTimer
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QWidget
 
     class WindowPolicy(QObject):
         def __init__(self):
@@ -16,11 +16,61 @@ def create_window_policy(pet):
             self.expiry.setSingleShot(True)
             self.expiry.timeout.connect(self.expire_pending)
             self._watched = set()
+            self._roles = {}
+            self._manual_roles = set()
             self._stacking = False
             self._stack_pending = False
             self.last_order = ()
             self.watch(pet)
             self.watch(getattr(pet, 'bubble', None))
+
+        def allows(self, role):
+            if not getattr(pet, 'pet_only', False) or role is None:
+                return True
+            if role in ('pet', 'settings'):
+                return True
+            return role in self._manual_roles
+
+        def hide_widget(self, widget):
+            """Cancel deferred reveals as well as the currently visible frame."""
+            animation = getattr(widget, '_reveal_animation', None)
+            if animation is not None:
+                animation.stop()
+                widget._reveal_target = False
+            motion = getattr(widget, '_ui_motion', None)
+            if motion is not None:
+                motion.cancel()
+            else:
+                QWidget.hide(widget)
+
+        def set_pet_only(self, enabled):
+            pet.pet_only = bool(enabled)
+            self._manual_roles.clear()
+            self.drop_pending()
+            notices = getattr(pet, '_notices', None)
+            if notices is not None:
+                notices.clear()
+            for name in ('bubble_timer', '_notice_timer', '_notification_timer', '_quota_hide_timer'):
+                timer = getattr(pet, name, None)
+                if timer is not None:
+                    timer.stop()
+            chat = getattr(pet, 'chat', None)
+            hide_chat = getattr(chat, 'hide', None)
+            if hide_chat is not None:
+                hide_chat()
+            for role, widget in self.windows():
+                self.watch(widget, role)
+                if widget is not None and role not in ('pet', 'settings'):
+                    self.hide_widget(widget)
+            # Hover and data refresh retain their own activity state. Leaving
+            # this presentation mode restores only the persistent controls.
+            dock = getattr(pet, 'dock_controls', None)
+            if dock is not None:
+                dock.refresh()
+            for widget in (getattr(pet, 'toolbar', None), getattr(pet, 'activity_cards', None)):
+                if widget is not None:
+                    widget.sync_visibility()
+            self.schedule_stack()
 
         def settings_open(self):
             from ui_motion import visible
@@ -68,9 +118,14 @@ def create_window_policy(pet):
                 pet._notice_timer.stop()
 
         def user_open(self, kind):
+            if getattr(pet, 'pet_only', False):
+                if kind in ('composer', 'history'):
+                    self._manual_roles.update(('composer', 'history'))
+                elif kind == 'quota':
+                    self._manual_roles.add('quota')
             if kind in ('quota', 'notice'):
                 self.drop_pending()
-            if self.settings_open():
+            if kind != 'history' and self.settings_open():
                 pet.settings.sync()
                 pet.settings_panel.accept()
 
@@ -80,6 +135,9 @@ def create_window_policy(pet):
                 QTimer.singleShot(0, self.flush)
 
         def system_popup(self, kind, callback, milliseconds):
+            if not self.allows(kind):
+                self.drop_pending(kind)
+                return
             if self.settings_open():
                 self._pending[kind] = (kind, callback, self.clock() + milliseconds / 1000)
                 self.arm_expiry()
@@ -87,7 +145,8 @@ def create_window_policy(pet):
             self.present(kind, callback, milliseconds)
 
         def present(self, kind, callback, milliseconds):
-            if getattr(pet, 'exit_reason', None) is not None or pet.desktop_hidden():
+            if (not self.allows(kind) or getattr(pet, 'exit_reason', None) is not None
+                    or pet.desktop_hidden()):
                 return
             if kind == 'quota':
                 pet.close_notification()
@@ -99,6 +158,9 @@ def create_window_policy(pet):
             self.schedule_stack()
 
         def flush(self):
+            for kind in tuple(self._pending):
+                if not self.allows(kind):
+                    self.drop_pending(kind)
             if self.settings_open() or self.pending is None:
                 return
             kind, callback, deadline = self.pending
@@ -114,6 +176,8 @@ def create_window_policy(pet):
         def watch(self, widget, role=None):
             if widget is not None:
                 role = role or next((name for name, value in self.windows() if value is widget), None)
+                if role is not None:
+                    self._roles[widget] = role
                 if role is not None and role != 'pet':
                     from ui_motion import attach
                     attach(widget, pet, role)
@@ -121,6 +185,9 @@ def create_window_policy(pet):
                 self._watched.add(widget)
                 widget.installEventFilter(self)
                 widget.destroyed.connect(lambda *_, widget=widget: self._watched.discard(widget))
+                widget.destroyed.connect(lambda *_, widget=widget: self._roles.pop(widget, None))
+            if widget is not None and not self.allows(role):
+                self.hide_widget(widget)
 
         def windows(self):
             chat = getattr(pet, 'chat', None)
@@ -194,6 +261,9 @@ def create_window_policy(pet):
                 self._stacking = False
 
         def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.Show and not self.allows(self._roles.get(watched)):
+                self.hide_widget(watched)
+                return True
             if event.type() in (QEvent.Type.Show, QEvent.Type.Hide, QEvent.Type.WindowActivate, QEvent.Type.ZOrderChange):
                 self.schedule_stack()
             return super().eventFilter(watched, event)
