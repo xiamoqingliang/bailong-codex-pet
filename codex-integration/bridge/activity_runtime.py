@@ -15,7 +15,7 @@ import subprocess
 import time
 from urllib.parse import urlparse, unquote
 
-from activity_source import snapshot
+from activity_source import MAX_ROOTS, snapshot
 
 BASE = Path(__file__).resolve().parent
 POLL_SECONDS = 2.0
@@ -24,17 +24,27 @@ TERMINAL_SECONDS = 60.0
 
 
 def apply_ui_hints(sessions, hints):
-    """Only supplement an in-progress task whose title uniquely identifies it."""
+    """Use explicit native status only for a uniquely identified known root."""
     counts = Counter(item.get('title') for item in sessions)
-    by_title = {item.get('title'): item.get('state') for item in hints
-                if isinstance(item, dict) and item.get('state') in ('running', 'needs_input', 'failed')}
+    valid_hints = [item for item in hints if isinstance(item, dict)
+                   and isinstance(item.get('title'), str) and item['title'].strip()
+                   and item['title'] != '未命名任务'
+                   and item.get('state') in ('running', 'needs_input', 'failed')]
+    hint_counts = Counter(item['title'] for item in valid_hints)
+    by_title = {item['title']: item['state'] for item in valid_hints if hint_counts[item['title']] == 1}
     result = []
     for item in sessions:
         updated = dict(item)
         title = item.get('title')
-        if item.get('state') == 'running' and counts[title] == 1 and title in by_title:
-            updated['state'] = by_title[title]
+        hint = by_title.get(title)
+        promote = (item.get('state') in ('idle', 'completed', 'failed', 'unknown')
+                   and hint in ('running', 'needs_input'))
+        if counts[title] == 1 and hint is not None and (item.get('state') == 'running' or promote):
+            updated['state'] = hint
             updated['stateEvidence'] = 'native-ui-label'
+            if promote:
+                # This is evidence of current activity, not a new SQL turn.
+                updated['activity_token'] = 'native-ui:' + str(item.get('turn_id') or '')
         result.append(updated)
     return result
 
@@ -44,27 +54,40 @@ class ActivityReducer:
     def __init__(self):
         self.previous = {}
         self.terminal_until = {}
+        self.ui_promoted_turns = set()
         self.cards = []
 
     def accept(self, sessions, now):
         cards = []
         current = {}
+        current_turns = set()
         for item in sessions:
             key = item.get('key')
             if not key:
                 continue
-            token = (key, item.get('turn_id'))
+            base_token = (key, item.get('turn_id'))
+            current_turns.add(base_token)
+            activity_token = item.get('activity_token')
+            token = (key, activity_token or item.get('turn_id'))
             state = item.get('state')
+            if activity_token:
+                self.ui_promoted_turns.add(base_token)
+            elif state in ('running', 'needs_input'):
+                # A fresh indexed active state restores normal completion
+                # tracking even if its projection lagged behind the native UI.
+                self.ui_promoted_turns.discard(base_token)
             previous = self.previous.get(token)
             if state in ('completed', 'failed') and previous in ('running', 'needs_input'):
                 self.terminal_until[token] = now + TERMINAL_SECONDS
             current[token] = state
             show = state in ('running', 'needs_input')
             if state in ('completed', 'failed'):
-                show = bool(item.get('initial_visible') or self.terminal_until.get(token, 0) > now)
+                show = (base_token not in self.ui_promoted_turns
+                        and bool(item.get('initial_visible') or self.terminal_until.get(token, 0) > now))
             if show:
                 cards.append(dict(item))
         self.previous = current
+        self.ui_promoted_turns.intersection_update(current_turns)
         self.terminal_until = {token: deadline for token, deadline in self.terminal_until.items()
                                if token in current and deadline > now}
         self.cards = cards
@@ -96,6 +119,7 @@ class ActivityRuntime:
         self.reason = 'not-started'
         self.truncated = False
         self.ui_hint_count = 0
+        self.ui_promotion_count = 0
         self._ui_cache = []
         self._ui_at = 0.0
         self._ui_context = None
@@ -106,15 +130,19 @@ class ActivityRuntime:
     def _collect(self, process_id, app_started_at):
         result = snapshot(app_started_at=app_started_at)
         result['uiHintCount'] = 0
+        result['uiPromotionCount'] = 0
         if not result.get('available'):
             return result
         sessions = result.get('sessions', [])
         title_counts = Counter(item.get('title') for item in sessions)
-        titles = sorted({item['title'] for item in sessions if item.get('state') == 'running'
-                         and item.get('title') != '未命名任务' and title_counts[item.get('title')] == 1})
-        context = (process_id, tuple(titles))
+        titles = sorted({item['title'] for item in sessions if isinstance(item.get('title'), str)
+                         and item['title'].strip() and item['title'] != '未命名任务'
+                         and title_counts[item['title']] == 1})[:MAX_ROOTS]
+        title_keys = tuple(sorted((item['title'], item.get('key')) for item in sessions
+                                  if item.get('title') in titles))
+        context = (process_id, app_started_at, title_keys)
         now = time.monotonic()
-        if titles and (context != self._ui_context or now - self._ui_at >= 4):
+        if titles and (context != self._ui_context or not 0 <= now - self._ui_at < 4):
             self._ui_context, self._ui_at, self._ui_cache = context, now, []
             powershell = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
             try:
@@ -127,7 +155,8 @@ class ActivityRuntime:
                 )
                 if completed.returncode == 0 and len(completed.stdout) <= 65536:
                     payload = json.loads(completed.stdout.decode('utf-8-sig'))
-                    if payload.get('available') and isinstance(payload.get('hints'), list):
+                    if (isinstance(payload, dict) and payload.get('available') is True
+                            and isinstance(payload.get('hints'), list)):
                         self._ui_cache = payload['hints']
             except (OSError, ValueError, subprocess.TimeoutExpired):
                 pass
@@ -135,6 +164,7 @@ class ActivityRuntime:
             self._ui_cache = []
         result['sessions'] = apply_ui_hints(sessions, self._ui_cache)
         result['uiHintCount'] = len(self._ui_cache)
+        result['uiPromotionCount'] = sum(bool(item.get('activity_token')) for item in result['sessions'])
         return result
 
     def poll(self, active, state):
@@ -151,6 +181,7 @@ class ActivityRuntime:
             self.animation_sessions = []
             self.routes = {}
             self.available = False
+            self.ui_hint_count = self.ui_promotion_count = 0
             self.last_good_at = None
             self.next_poll = 0
             self.cards.set_sessions([])
@@ -169,6 +200,7 @@ class ActivityRuntime:
                     self.reason = None
                     self.truncated = bool(data.get('truncated'))
                     self.ui_hint_count = data.get('uiHintCount', 0)
+                    self.ui_promotion_count = data.get('uiPromotionCount', 0)
                     self.sessions = data.get('sessions', [])
                     visible = self.reducer.accept(self.sessions, now)
                     self.animation_sessions = visible
@@ -215,6 +247,7 @@ class ActivityRuntime:
                 'activityReason': self.reason, 'activityCount': len(self.cards.sessions),
                 'activityStates': dict(Counter(item['state'] for item in self.cards.sessions)),
                 'activitySourceTruncated': self.truncated, 'activityUiHintCount': self.ui_hint_count,
+                'activityUiPromotionCount': self.ui_promotion_count,
                 'activityLastOpenSucceeded': self.last_open_succeeded, 'activityLastOpenAt': self.last_open_at,
                 'activityWaitingCoverage': 'available-native-ui-labels'}
 
