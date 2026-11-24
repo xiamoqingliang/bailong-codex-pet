@@ -11,14 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from package_commands import uninstall_command
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.5.1.2'
+VERSION = '0.5.1.3'
 NAME = 'Bailong-Codex-v051'
 BRIDGE_FILES = '''bridge_loader.py bridge_pet.py pet_lifecycle.py bridge_policy.py
 bridge_supervisor.py bailong_toolbar.py bailong_theme.py bailong_settings.py
 dock_controls.py v051_behavior.py companion_layout.py window_policy.py ui_motion.py quota_panel.py activity_cards.py activity_runtime.py activity_source.py
 activity_ui_hints.ps1 codex_observer.ps1 native_mini_control.ps1 native_menu_shield.cs
 native_overlay_mask.py native_visibility.py desktop_ipc.py desktop_chat_adapter.py
-desktop_chat_link.py conversation_sync.py chat_ui_style.py file_diff.py detached_launcher.py asset_source.py'''.split()
+desktop_chat_link.py desktop_chat_window.py desktop_chat_window.ps1
+conversation_sync.py chat_ui_style.py file_diff.py detached_launcher.py asset_source.py'''.split()
 README_FILE = ROOT / 'docs/发行版README.md'
 README = (README_FILE if README_FILE.is_file() else ROOT / 'README.md').read_text(encoding='utf-8')
 

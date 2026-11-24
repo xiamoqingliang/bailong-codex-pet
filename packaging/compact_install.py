@@ -35,7 +35,8 @@ REQUIRED_BRIDGE_FILES = (
     "bailong_toolbar.py activity_cards.py activity_runtime.py activity_source.py "
     "activity_ui_hints.ps1 codex_observer.ps1 native_mini_control.ps1 native_menu_shield.cs "
     "native_overlay_mask.py native_visibility.py desktop_ipc.py desktop_chat_adapter.py "
-    "desktop_chat_link.py conversation_sync.py chat_ui_style.py file_diff.py detached_launcher.py asset_source.py bridge-config.json "
+    "desktop_chat_link.py desktop_chat_window.py desktop_chat_window.ps1 "
+    "conversation_sync.py chat_ui_style.py file_diff.py detached_launcher.py asset_source.py bridge-config.json "
     "bailong_theme.py bailong_settings.py dock_controls.py v051_behavior.py companion_layout.py window_policy.py ui_motion.py quota_panel.py"
 ).split()
 

@@ -5,7 +5,7 @@ import threading
 import unittest
 
 from desktop_chat_link import make_session_class
-from desktop_ipc import DesktopUnavailable, DesktopOutcomeUnknown
+from desktop_ipc import DesktopUnavailable, DesktopOutcomeUnknown, DesktopPipeMissing
 
 
 class Cancelled(RuntimeError):
@@ -145,6 +145,27 @@ class LinkTests(unittest.TestCase):
             session.run("do not send")
         self.assertFalse(any(call[0] == "thread/start" for call in session.original_calls))
         self.assertFalse(any(call[0] == "start_turn" for call in self.ipc.calls))
+
+    def test_missing_pipe_uses_window_on_the_same_existing_thread(self):
+        def missing_pipe(timeout):
+            raise DesktopPipeMissing("pipe not found")
+
+        self.ipc.connect = missing_pipe
+        window = Ipc(self.clock)
+        window.connect = lambda: window.calls.append(("connect",))
+        window.follow = lambda thread_id: window.calls.append(("follow", thread_id))
+        klass = make_session_class(self.backend, client_factory=lambda: self.ipc,
+                                   window_factory=lambda cancel, opener: window,
+                                   open_thread=self.opened.append, clock=self.clock, sleep=self.clock.sleep)
+        session = klass("fixture-cwd", "thread-1")
+        self.assertEqual(session.run("native message")["threadId"], "thread-1")
+        self.assertEqual(window.calls[:2], [("connect",), ("follow", "thread-1")])
+        self.assertEqual([call[1:3] for call in window.calls if call[0] == "start_turn"],
+                         [("thread-1", "native message")])
+        self.assertEqual(self.opened, ["thread-1"])
+        self.assertTrue(self.ipc.closed)
+        self.assertTrue(window.closed)
+        self.assertEqual(session.original_calls, [("close", None)])
 
     def test_name_failure_does_not_publish_bad_id_and_retry_can_create(self):
         self.ipc = Ipc(self.clock, "seed-thread")

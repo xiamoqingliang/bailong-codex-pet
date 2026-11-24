@@ -41,6 +41,10 @@ class DesktopUnavailable(DesktopIpcError):
     pass
 
 
+class DesktopPipeMissing(DesktopUnavailable):
+    """The Desktop did not listen on the named pipe."""
+
+
 class DesktopProtocolError(DesktopIpcError):
     pass
 
@@ -124,6 +128,8 @@ class WindowsPipeTransport:
                 self.handle = handle
                 break
             code = ctypes.get_last_error()
+            if code == 2:  # ERROR_FILE_NOT_FOUND
+                raise DesktopPipeMissing("Codex Desktop IPC pipe does not exist")
             if code != 231 or time.monotonic() >= deadline:
                 raise DesktopUnavailable("Codex Desktop IPC is not available")
             self.api.WaitNamedPipeW(PIPE_NAME, 100)

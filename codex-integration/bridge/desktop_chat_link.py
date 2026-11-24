@@ -2,8 +2,9 @@
 
 Only an explicit ChatController.submit calls run(). New chats use the original
 app-server solely to create durable metadata, then release that writer. The
-Desktop owns execution and the pet follows its exact thread/turn stream. A
-request with an uncertain outcome is never retried through the legacy server.
+Desktop owns execution and the pet follows that thread. When the older pipe
+is absent, the same Desktop window accepts the message in its native composer.
+An uncertain submission is never retried through another transport.
 """
 from __future__ import annotations
 
@@ -15,7 +16,8 @@ from urllib.parse import quote
 import uuid
 
 from desktop_chat_adapter import DesktopStreamReducer, DesktopStreamError, NeedsSnapshot, install_session_class
-from desktop_ipc import DesktopIpcClient, DesktopIpcError, DesktopOutcomeUnknown, DesktopUnavailable
+from desktop_chat_window import DesktopChatWindow, DesktopWindowRejected
+from desktop_ipc import DesktopIpcClient, DesktopIpcError, DesktopOutcomeUnknown, DesktopPipeMissing, DesktopUnavailable
 
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
@@ -28,6 +30,7 @@ def open_desktop_thread(thread_id):
 
 
 def make_session_class(backend, *, client_factory=DesktopIpcClient,
+                       window_factory=None,
                        open_thread=open_desktop_thread, clock=time.monotonic,
                        sleep=time.sleep, owner_timeout=15.0, snapshot_timeout=10.0,
                        inactivity_timeout=900.0):
@@ -92,25 +95,37 @@ def make_session_class(backend, *, client_factory=DesktopIpcClient,
 
         def _attach(self, prompt):
             self._desktop_client = client_factory()
-            self._desktop_client.connect(timeout=5)
+            using_window = False
+            try:
+                self._desktop_client.connect(timeout=5)
+            except DesktopPipeMissing:
+                if window_factory is None:
+                    raise
+                self._desktop_client.close()
+                self._desktop_client = window_factory(self.cancel, open_thread)
+                self._desktop_client.connect()
+                using_window = True
             if not self.thread_id:
                 self._create_thread_only(prompt)
             elif not isinstance(self.thread_id, str) or not _ID.fullmatch(self.thread_id):
                 raise RuntimeError("保存的聊天标识无效，消息尚未发送。")
             self._check_cancel()
             open_thread(self.thread_id)
-            deadline = clock() + owner_timeout
-            owner = None
-            while clock() < deadline:
-                self._check_cancel()
-                owner = self._desktop_client.discover_owner(self.thread_id,
-                            timeout=min(3.0, max(0.1, deadline - clock())))
-                if owner:
-                    break
-                sleep(0.2)
-            if not owner:
-                raise DesktopUnavailable("Codex has not acquired the requested chat")
-            self._desktop_client.subscribe(self.thread_id, owner)
+            if using_window:
+                self._desktop_client.follow(self.thread_id)
+            else:
+                deadline = clock() + owner_timeout
+                owner = None
+                while clock() < deadline:
+                    self._check_cancel()
+                    owner = self._desktop_client.discover_owner(self.thread_id,
+                                timeout=min(3.0, max(0.1, deadline - clock())))
+                    if owner:
+                        break
+                    sleep(0.2)
+                if not owner:
+                    raise DesktopUnavailable("Codex has not acquired the requested chat")
+                self._desktop_client.subscribe(self.thread_id, owner)
             self._desktop_stream = DesktopStreamReducer(self.thread_id, self.emit)
             deadline = clock() + snapshot_timeout
             while clock() < deadline:
@@ -124,7 +139,9 @@ def make_session_class(backend, *, client_factory=DesktopIpcClient,
                     self._desktop_client.request_snapshot(self.thread_id)
                     continue
                 if self._desktop_stream.revision is not None:
-                    return
+                    return using_window
+            if using_window:
+                raise DesktopWindowRejected("暂时无法读取本机 Codex 的聊天状态，消息没有发送。")
             raise DesktopUnavailable("Codex has not provided the chat snapshot")
 
         def run(self, prompt):
@@ -133,11 +150,14 @@ def make_session_class(backend, *, client_factory=DesktopIpcClient,
             if not isinstance(prompt, str) or not prompt.strip():
                 raise ValueError("请输入要发送的内容。")
             try:
-                self._attach(prompt)
+                using_window = self._attach(prompt)
                 self._check_cancel()
                 if self._desktop_stream.busy:
                     raise RuntimeError("此聊天仍在 Codex 中执行，消息尚未发送。请等待完成，或先在 Codex 中停止当前任务。")
-                self.emit("progress", "已连接到 Codex 中的同一聊天，白龙会同步显示执行进展。")
+                if using_window:
+                    self.emit("progress", "正在将消息交给 Codex 中的同一聊天。")
+                else:
+                    self.emit("progress", "已连接到 Codex 中的同一聊天，白龙会同步显示执行进展。")
                 # Set before sending. Any exception from this point is not a
                 # license to submit the prompt again by a different transport.
                 self._desktop_submitted = True
@@ -148,6 +168,8 @@ def make_session_class(backend, *, client_factory=DesktopIpcClient,
                     raise DesktopOutcomeUnknown("Desktop did not return a recognized turn")
                 self.turn_id = turn_id
                 self.emit('codex_turn', turn_id)
+                if using_window:
+                    self.emit("progress", "消息已在 Codex 中发送。需要确认或补充信息时，请在同一聊天中处理。")
                 self._desktop_stream.bind_turn(turn_id)
                 deadline = clock() + inactivity_timeout
                 while not self._desktop_stream.terminal:
@@ -171,6 +193,12 @@ def make_session_class(backend, *, client_factory=DesktopIpcClient,
                 return self._desktop_stream.result()
             except backend.TaskCancelled:
                 raise
+            except DesktopWindowRejected as error:
+                if self.turn_id is not None:
+                    raise RuntimeError("无法继续读取 Codex 中的聊天，请在同一聊天中检查执行结果。") from error
+                if self.cancel.is_set():
+                    raise backend.TaskCancelled("已取消发送，消息没有发送。") from error
+                raise RuntimeError(str(error)) from error
             except (DesktopIpcError, DesktopStreamError, OSError) as error:
                 if self._desktop_submitted:
                     raise RuntimeError("与 Codex 的同步确认中断，消息可能已在执行；请先查看同一聊天，避免重复发送。") from error
@@ -204,6 +232,7 @@ def install_desktop_chat_link(original=None, **dependencies):
     ui = importlib.import_module("chat_ui")
     if getattr(backend.CodexSession, "_bailong_desktop_link", False):
         return backend.CodexSession
+    dependencies.setdefault("window_factory", DesktopChatWindow)
     session_class = make_session_class(backend, **dependencies)
     install_session_class(backend, ui, session_class)
     return session_class
