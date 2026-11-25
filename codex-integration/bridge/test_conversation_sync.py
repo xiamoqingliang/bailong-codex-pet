@@ -75,6 +75,25 @@ def cached_chat(key='local-1', thread='thread-1', turn='turn-1'):
 
 
 class ReaderTests(unittest.TestCase):
+    def test_only_changed_turns_are_projected_and_deleted_items_disappear(self):
+        from unittest.mock import patch
+        for number in (1, 2):
+            self.fixture.turn(f'turn-{number}', ordinal=number)
+            self.fixture.user(f'u{number}', f'question-{number}', number*10, turn=f'turn-{number}')
+            self.fixture.agent(f'a{number}', f'answer-{number}', number*10+1, turn=f'turn-{number}')
+        first = self.reader.read(['thread-1'])['threads']['thread-1']['turns']
+        with patch.object(self.reader, '_read_turns', wraps=self.reader._read_turns) as project:
+            self.reader.read(['thread-1'])
+            project.assert_not_called()
+            self.fixture.agent('a2', 'updated', 21, turn='turn-2', revision=22)
+            second = self.reader.read(['thread-1'])['threads']['thread-1']['turns']
+            self.assertEqual([row['turn_id'] for row in project.call_args.args[2]], ['turn-2'])
+            self.assertIs(second[0], first[0])
+            self.assertEqual(second[1]['result'], 'updated')
+        self.fixture.write(self.fixture.history, 'DELETE FROM thread_items WHERE item_id=?', ('a2',))
+        third = self.reader.read(['thread-1'])['threads']['thread-1']['turns']
+        self.assertNotIn('updated', json.dumps(third))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='BailongConversation-')
         self.addCleanup(temporary.cleanup)
@@ -224,6 +243,20 @@ class ReaderTests(unittest.TestCase):
 
 
 class MergeTests(unittest.TestCase):
+    def test_live_turn_keeps_identity_without_duplicate_and_completed_turn_is_copied(self):
+        old = {'codexTurnId': 'turn-1', 'prompt': 'question', 'messages': [], 'events': []}
+        chat = {'turns': [old]}
+        record = {'threadId': 'thread-1', 'visible': True, 'title': 'title', 'cwd': '.',
+                  'historyAvailable': True, 'turns': [dict(old, messages=[{'role': 'assistant', 'text': 'reply'}])]}
+        self.assertTrue(merge_thread(chat, record, old))
+        self.assertEqual(len(chat['turns']), 1)
+        self.assertIs(chat['turns'][0], old)
+        changed = deepcopy(record)
+        changed['turns'][0]['messages'][0]['text'] = 'completed'
+        self.assertTrue(merge_thread(chat, changed))
+        self.assertIsNot(chat['turns'][0], old)
+        self.assertEqual(old['messages'][0]['text'], 'reply')
+
     def test_only_adjacent_matching_tool_types_are_grouped(self):
         messages = [{'id': str(index), 'role': role, 'toolType': kind} for index, (role, kind) in enumerate([
             ('tool', 'commandExecution'), ('tool', 'commandExecution'),
@@ -297,7 +330,38 @@ class ControllerTests(unittest.TestCase):
         self.pet = self.Pet()
         self.controller = self.Controller(self.pet, directory=directory)
         self.controller.conversation_sync.reader = ConversationReader(self.fixture.root)
+        # Rendering assertions exercise a visible history window. Hidden
+        # windows deliberately defer transcript layout until opened.
+        self.controller.window.show()
         self.addCleanup(self.dispose)
+
+    def test_hidden_window_defers_layout_until_opened(self):
+        self.controller.window.hide()
+        before = self.controller.window.view.toPlainText()
+        self.refresh()
+        self.assertEqual(self.controller.window.view.toPlainText(), before)
+        self.assertEqual(self.controller.active['turns'][0]['result'], '第一个回复')
+        self.controller.open_history()
+        self.assertIn('第一个回复', self.controller.window.view.toPlainText())
+
+    def test_unchanged_revision_skips_merge_and_final_stream_revision_is_applied(self):
+        from unittest.mock import patch
+        self.refresh()
+        with patch('conversation_sync.merge_thread', wraps=merge_thread) as merge:
+            self.refresh()
+            merge.assert_not_called()
+            self.fixture.agent('a1', 'updated', 2, revision=3)
+            live = self.controller.active['turns'][0]
+            self.controller.running_chat = self.controller.active
+            self.controller.running_turn = live
+            self.refresh()
+            self.assertEqual(len(self.controller.active['turns']), 1)
+            self.assertIs(self.controller.active['turns'][0], live)
+            self.controller.running_chat = None
+            self.controller.running_turn = None
+            merge.reset_mock()
+            self.refresh()
+            merge.assert_called_once()
 
     def dispose(self):
         self.controller.shutdown()

@@ -99,6 +99,7 @@ class ConversationReader:
     def __init__(self, home=None):
         self.home = Path(home or os.environ.get('CODEX_HOME') or Path.home() / '.codex')
         self.cache = {}
+        self.turn_cache = {}
 
     def read(self, thread_ids):
         requested = {value for value in thread_ids if valid_id(value)}
@@ -139,16 +140,31 @@ class ConversationReader:
                     actual = row['id']
                     turns = history.execute('''SELECT turn_id,status,error_json,started_at,completed_at,rollout_ordinal
                         FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal,started_at,turn_id''', (actual,)).fetchall()
-                revision = history.execute(f'''SELECT count(*),max(updated_at_ordinal),sum(updated_at_ordinal) FROM thread_items
-                    WHERE thread_id=? AND item_type IN {ITEM_TYPES}''', (actual,)).fetchone()
-                fingerprint = (tuple(tuple(turn) for turn in turns), tuple(revision))
+                revision = history.execute(f'''SELECT turn_id,count(*),max(updated_at_ordinal),sum(updated_at_ordinal) FROM thread_items
+                    WHERE thread_id=? AND item_type IN {ITEM_TYPES} GROUP BY turn_id ORDER BY turn_id''', (actual,)).fetchall()
+                fingerprint = (tuple(tuple(turn) for turn in turns), tuple(tuple(row) for row in revision))
                 cached = self.cache.get(actual)
                 if cached is not None and cached[0] == fingerprint:
                     public_turns = cached[1]
                 else:
-                    public_turns = self._read_turns(history, actual, turns)
+                    revisions = {row[0]: tuple(row)[1:] for row in revision}
+                    previous = self.turn_cache.get(actual, {})
+                    signatures = {turn['turn_id']: (tuple(turn), revisions.get(turn['turn_id'])) for turn in turns}
+                    changed_turns = [turn for turn in turns if previous.get(turn['turn_id'], (None,))[0]
+                                     != signatures[turn['turn_id']]]
+                    fresh = {turn['codexTurnId']: turn for turn in self._read_turns(history, actual, changed_turns)} if changed_turns else {}
+                    updated = {}
+                    public_turns = []
+                    for turn in turns:
+                        turn_key = turn['turn_id']
+                        value = fresh.get(turn_key) if turn_key in fresh else previous.get(turn_key, (None, None))[1]
+                        if value is not None:
+                            updated[turn_key] = (signatures[turn_key], value)
+                            public_turns.append(value)
+                    self.turn_cache[actual] = updated
                     self.cache[actual] = (fingerprint, public_turns)
-                metadata.update(actualThreadId=actual, turns=public_turns, historyAvailable=bool(turns))
+                metadata.update(actualThreadId=actual, turns=public_turns, historyAvailable=bool(turns),
+                                historyRevision=fingerprint)
                 result['threads'][key] = metadata
             result['available'] = True
         except (OSError, sqlite3.Error, ValueError, TypeError):
@@ -161,6 +177,9 @@ class ConversationReader:
         return result
 
     def _read_turns(self, connection, thread_id, turns):
+        if not turns:
+            return []
+        placeholders = ','.join('?' for _ in turns)
         # Large output/diffs stay in Codex until the user expands that item.
         # reasoning.content and image payloads are never selected.
         rows = connection.execute(f'''SELECT turn_id,item_id,item_type,created_at_ms,rollout_ordinal,updated_at_ordinal,
@@ -182,7 +201,8 @@ class ConversationReader:
                 'kind',json_extract(change.value,'$.kind.type'),'movePath',json_extract(change.value,'$.kind.move_path')))
               FROM json_each(json_extract(item_json,'$.changes')) change) END AS changes
             FROM thread_items WHERE thread_id=? AND item_type IN {ITEM_TYPES}
-            ORDER BY rollout_ordinal,item_id''', (thread_id,)).fetchall()
+            AND turn_id IN ({placeholders})
+            ORDER BY rollout_ordinal,item_id''', (thread_id, *(turn['turn_id'] for turn in turns))).fetchall()
         by_turn = {}
         for item in rows:
             by_turn.setdefault(item['turn_id'], []).append(item)
@@ -333,7 +353,8 @@ def coalesce_conversations(conversations, aliases=None, preferred_id=None):
 
 
 def merge_thread(chat, record, running_turn=None):
-    before = deepcopy(chat)
+    before = dict(chat)
+    running_changed = False
     chat['threadId'] = record['threadId']
     chat['codexHidden'] = not record['visible']
     chat['codexHiddenReason'] = record.get('reason')
@@ -353,12 +374,21 @@ def merge_thread(chat, record, running_turn=None):
                 if turn is not None:
                     remaining.remove(turn)
             turn = turn if turn is not None else {'events': []}
+            if all(turn.get(key) == value for key, value in incoming.items()):
+                ordered.append(turn)
+                continue
+            # The streaming worker still owns running_turn by identity.
+            # Copy completed turns only, otherwise the live turn is appended twice.
+            if turn is not running_turn:
+                turn = dict(turn)
             # Projection can lag a newly created turn; do not erase text that
             # the Desktop stream has already delivered for that same turn.
             values = deepcopy(incoming)
             if not incoming['messages'] and turn.get('messages'):
                 for key in ('messages', 'prompt', 'output', 'result', 'summary'):
                     values[key] = turn.get(key, values[key])
+            if turn is running_turn:
+                running_changed = any(turn.get(key) != value for key, value in values.items())
             turn.update(values)
             ordered.append(turn)
         ordered.extend(remaining)
@@ -366,7 +396,7 @@ def merge_thread(chat, record, running_turn=None):
             ordered.append(running_turn)
         chat['turns'] = ordered
         chat['codexHistoryVersion'] = 1
-    return before != chat
+    return running_changed or before != chat
 
 
 def make_controller_class(original_class, *, home=None, background=True, reader_factory=None):
@@ -420,6 +450,8 @@ def make_controller_class(original_class, *, home=None, background=True, reader_
             self.window.view.installEventFilter(self)
             self.window.view.viewport().installEventFilter(self)
             self._coalesce()
+            from responsive_io import HistoryWriter
+            self._history_writer = HistoryWriter(self)
             self.conversation_sync = ConversationSync(self, (reader_factory or ConversationReader)(home), background=background)
             self.refresh_list()
 
@@ -750,6 +782,10 @@ def make_controller_class(original_class, *, home=None, background=True, reader_
             return ''.join(content)
 
         def render(self):
+            # A hidden QTextBrowser still parses/layouts the entire transcript.
+            # Keep the model current, but defer that work until history opens.
+            if not self._opening_history and not self.window.isVisible():
+                return
             chat = self.active
             if hasattr(self.window, 'set_chat_header'):
                 self.window.set_chat_header(chat)
@@ -873,6 +909,9 @@ def make_controller_class(original_class, *, home=None, background=True, reader_
             sync = getattr(self, 'conversation_sync', None)
             if sync is not None:
                 sync.close()
+            writer = getattr(self, '_history_writer', None)
+            if writer is not None:
+                writer.close()
             return super().shutdown()
 
     return LinkedController
@@ -888,6 +927,8 @@ class ConversationSync:
         self.closed = False
         self.available = None
         self.error_type = None
+        self._applied_revisions = {}
+        self._coalesce_signature = None
         self.timer = QTimer(controller)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.poll)
@@ -946,7 +987,15 @@ class ConversationSync:
         controller = self.controller
         records = snapshot['threads']
         aliases = {key: record['threadId'] for key, record in records.items()}
-        controller._coalesce(aliases)
+        coalesce_signature = (tuple(sorted(aliases.items())),
+                              tuple((chat.get('id'), chat.get('threadId'))
+                                    for chat in controller.store.conversations))
+        if coalesce_signature != self._coalesce_signature:
+            controller._coalesce(aliases)
+            self._coalesce_signature = (tuple(sorted(aliases.items())),
+                                       tuple((chat.get('id'), chat.get('threadId'))
+                                             for chat in controller.store.conversations))
+            self._applied_revisions.clear()
         changed = False
         for chat in controller.store.conversations:
             record = records.get(chat.get('threadId')) or next((value for value in records.values()
@@ -956,7 +1005,17 @@ class ConversationSync:
             if chat.get('codexHistoryVersion') != 1:
                 controller._backup_history()
             running = controller.running_turn if controller.running_chat is chat else None
+            revision = (record.get('historyRevision'), record.get('visible'),
+                        record.get('reason'), record.get('title'), record.get('cwd'))
+            # Missing revisions (older/custom readers) must never suppress sync.
+            if (record.get('historyRevision') is not None and running is None
+                    and self._applied_revisions.get(chat['id']) == revision):
+                continue
             changed |= merge_thread(chat, record, running)
+            if running is not None:
+                self._applied_revisions.pop(chat['id'], None)
+            elif record.get('historyRevision') is not None:
+                self._applied_revisions[chat['id']] = revision
         if changed:
             controller.dirty = True
             controller.refresh_list()
@@ -971,6 +1030,8 @@ class ConversationSync:
 def install_conversation_sync(original=None):
     ui = importlib.import_module('chat_ui')
     sync = importlib.import_module('desktop_task_sync')
+    from responsive_io import install_reader
+    install_reader(sync)
     from chat_ui_style import install_chat_ui
     install_chat_ui(ui)
     if getattr(ui.ChatController, '_bailong_conversation_sync', False):
